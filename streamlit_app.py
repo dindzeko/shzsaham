@@ -1,13 +1,13 @@
 import streamlit as st
 
-# Atur konfigurasi halaman utama
+# Set page config
 st.set_page_config(
     page_title="SHZ Saham",
     page_icon="📈",
     layout="wide"
 )
 
-# CSS untuk header dan background
+# Custom CSS untuk header
 st.markdown("""
     <style>
     .main-header {
@@ -30,13 +30,16 @@ st.markdown("""
         padding: 0;
         margin: 0;
     }
-    .menu a {
+    .menu button {
+        background: none;
+        border: none;
         color: #FF5733;
-        text-decoration: none;
         font-size: 14px;
         font-weight: 500;
+        cursor: pointer;
+        padding: 0;
     }
-    .menu a:hover {
+    .menu button:hover {
         text-decoration: underline;
     }
     .overlay-text {
@@ -60,39 +63,35 @@ st.markdown("""
         color: #ddd;
         margin: 10px 0 0;
     }
-    .stImage > img {
-        border-radius: 0;
-    }
     </style>
 """, unsafe_allow_html=True)
 
-# Header
-st.markdown("""
-    <div class="main-header">
-        <span>SHZ Saham</span>
-        <ul class="menu">
-            <li><a href="?page=home">Home</a></li>
-            <li><a href="?page=screener">Screener</a></li>
-            <li><a href="?page=tarik_data">Tarik Data</a></li>
-            <li><a href="?page=analisa">Analisa Saham</a></li>
-        </ul>
-    </div>
-""", unsafe_allow_html=True)
+# Header dengan tombol navigasi (bukan <a> tag)
+st.markdown('<div class="main-header">', unsafe_allow_html=True)
+st.write("SHZ Saham")
 
-# Baca parameter halaman dari query string
-from streamlit import experimental_get_query_params as get_query_params
-from streamlit import experimental_set_query_params as set_query_params
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    if st.button("Screener", key="btn_screener"):
+        st.switch_page("pages/screener.py")
+with col2:
+    if st.button("Tarik Data", key="btn_tarik"):
+        st.switch_page("pages/tarik_data.py")
+with col3:
+    if st.button("Analisa Saham", key="btn_analisa"):
+        st.switch_page("pages/analisa_saham.py")
+st.markdown('</div>', unsafe_allow_html=True)
 
-params = get_query_params()
-page = params.get("page", ["home"])[0]
-
-# Background hanya di home
-if page == "home":
+# Halaman utama (home)
+if "page" not in st.query_params:
+    # Background dari URL
     try:
-        # Gunakan gambar dari URL
-        st.image("https://storage.googleapis.com/flip-prod-mktg-strapi/media-library/apa_itu_investasi_saham_d3716da8f1/apa_itu_investasi_saham_d3716da8f1.jpeg", use_column_width=True)
-    except Exception as e:
-        st.error(f"Error loading image: {e}")
+        st.image(
+            "https://storage.googleapis.com/flip-prod-mktg-strapi/media-library/apa_itu_investasi_saham_d3716da8f1/apa_itu_investasi_saham_d3716da8f1.jpeg",
+            use_container_width=True
+        )
+    except:
+        st.image("https://via.placeholder.com/1920x1080/000000/FFFFFF?text=Background+SHZ+Saham", use_container_width=True)
 
     st.markdown("""
         <div class="overlay-text">
@@ -100,11 +99,3 @@ if page == "home":
             <p class="desc">Analisa & Screening Saham Otomatis</p>
         </div>
     """, unsafe_allow_html=True)
-
-# Routing ke halaman
-if page == "screener":
-    st.switch_page("pages/screener.py")
-elif page == "tarik_data":
-    st.switch_page("pages/tarik_data.py")
-elif page == "analisa":
-    st.switch_page("pages/analisa_saham.py")
