@@ -23,13 +23,6 @@ st.markdown("""
         position: relative;
         z-index: 100;
     }
-    .menu {
-        list-style: none;
-        display: flex;
-        gap: 20px;
-        padding: 0;
-        margin: 0;
-    }
     .menu button {
         background: none;
         border: none;
@@ -66,20 +59,20 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Header dengan tombol navigasi (bukan <a> tag)
+# Header dengan tombol navigasi
 st.markdown('<div class="main-header">', unsafe_allow_html=True)
 st.write("SHZ Saham")
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 with col1:
-    if st.button("Screener", key="btn_screener"):
-        st.switch_page("pages/screener.py")
+    if st.button("Screener"):
+        st.switch_page("screener")
 with col2:
-    if st.button("Tarik Data", key="btn_tarik"):
-        st.switch_page("pages/tarik_data.py")
+    if st.button("Tarik Data"):
+        st.switch_page("tarik_data")
 with col3:
-    if st.button("Analisa Saham", key="btn_analisa"):
-        st.switch_page("pages/analisa_saham.py")
+    if st.button("Analisa Saham"):
+        st.switch_page("analisa_saham")
 st.markdown('</div>', unsafe_allow_html=True)
 
 # Halaman utama (home)
@@ -91,11 +84,4 @@ if "page" not in st.query_params:
             use_container_width=True
         )
     except:
-        st.image("https://via.placeholder.com/1920x1080/000000/FFFFFF?text=Background+SHZ+Saham", use_container_width=True)
-
-    st.markdown("""
-        <div class="overlay-text">
-            <p class="name">SHZ Saham</p>
-            <p class="desc">Analisa & Screening Saham Otomatis</p>
-        </div>
-    """, unsafe_allow_html=True)
+        st.image("https://via.placeholder.com/1920x1080/000000/FFFFFF?text=Background+SHZ+Sah
