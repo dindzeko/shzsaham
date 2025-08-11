@@ -1,16 +1,12 @@
 import streamlit as st
 
-# ==== SAFE IMPORT HELPER ====
+# ==== SAFE IMPORT (SILENT) ====
 def safe_import(module_name, alias=None, fallback=None):
     try:
         module = __import__(module_name, fromlist=["*"])
-        if alias:
-            globals()[alias] = module
-        else:
-            globals()[module_name] = module
+        globals()[alias or module_name] = module
         return module
     except ModuleNotFoundError:
-        st.warning(f"⚠️ Modul `{module_name}` tidak ditemukan. Menggunakan fallback.")
         if fallback:
             if callable(fallback):
                 globals()[alias or module_name] = fallback
@@ -18,15 +14,14 @@ def safe_import(module_name, alias=None, fallback=None):
                 globals()[alias or module_name] = fallback
         return fallback
 
-# ==== IMPORTS AMAN ====
-safe_import("streamlit_option_menu", alias="option_menu", fallback=lambda **kwargs: st.selectbox(kwargs.get("menu_title","Menu"), kwargs.get("options", [])))
+# Import menu (pakai selectbox kalau option_menu tidak ada)
+safe_import(
+    "streamlit_option_menu",
+    alias="option_menu",
+    fallback=lambda **kwargs: st.selectbox(kwargs.get("menu_title","Menu"), kwargs.get("options", []))
+)
 
-# ==== OPSIONAL: Jika ada library lain yang ingin di-safe-import ====
-# safe_import("pandas", alias="pd")
-# safe_import("yfinance", alias="yf")
-# safe_import("numpy", alias="np")
-
-# ==== CSS INJECT ====
+# CSS
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
@@ -43,24 +38,23 @@ h1 {
 """
 add_css(css_styles)
 
-# ==== HALAMAN-HALAMAN ====
+# Halaman (silent fallback)
 try:
     from pages.screener_pisau_jatuh import app as pisau_jatuh_app
     from pages.screener_multi import app as multi_screener_app
     from pages.analisa import app as analisa_app
     from pages.tarik_data import app as tarik_data_app
-except ImportError as e:
-    st.warning(f"Beberapa modul belum tersedia: {str(e)}. Menggunakan halaman dummy.")
+except ImportError:
     def pisau_jatuh_app(): st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
     def multi_screener_app(): st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
     def analisa_app(): st.write("📊 Halaman Analisa belum diimplementasikan.")
     def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.")
 
-# ==== SESSION STATE ====
+# Session state
 if "subpage" not in st.session_state:
     st.session_state["subpage"] = None
 
-# ==== MAIN PAGE ====
+# Halaman utama
 def main_page():
     st.title("🎯 Selamat Datang di Aplikasi Screener & Analisis")
     st.markdown("""
@@ -68,15 +62,14 @@ def main_page():
     
     Pilih menu di sidebar untuk mulai:
     
-    - **Screener**: Lakukan screening data dengan berbagai metode
-    - **Analisa**: Analisis data yang sudah diambil
-    - **Tarik Data**: Ekstraksi data dari sumber eksternal
+    - **Screener**
+    - **Analisa**
+    - **Tarik Data**
     """)
 
 def screener_page():
     st.title("🔍 Screener")
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.button("Pisau Jatuh", use_container_width=True):
             st.session_state["subpage"] = "Pisau Jatuh"
@@ -85,23 +78,19 @@ def screener_page():
             st.session_state["subpage"] = "Multi Screener"
     
     if st.session_state["subpage"] == "Pisau Jatuh":
-        st.subheader("⚙️ Pisau Jatuh")
         pisau_jatuh_app()
     elif st.session_state["subpage"] == "Multi Screener":
-        st.subheader("⚙️ Multi Screener")
         multi_screener_app()
 
 def analisa_page():
-    st.title("📊 Analisa")
     st.session_state["subpage"] = None
     analisa_app()
 
 def tarik_data_page():
-    st.title("📥 Tarik Data")
     st.session_state["subpage"] = None
     tarik_data_app()
 
-# ==== NAVIGASI ====
+# Navigasi
 pages = {
     "Main Page": main_page,
     "Screener": screener_page,
@@ -135,6 +124,7 @@ with st.sidebar:
 if selected == "Main Page":
     st.session_state["subpage"] = None
 
+# Render
 try:
     pages[selected]()
 except Exception as e:
