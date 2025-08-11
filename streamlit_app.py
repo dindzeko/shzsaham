@@ -86,11 +86,11 @@ def screener_page():
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("Pisau Jatuh", use_container_width=True):
+        if st.button("Pisau Jatuh", use_container_width=True, key="pisau_jatuh_btn"):
             st.session_state["subpage"] = "Pisau Jatuh"
     
     with col2:
-        if st.button("Multi Screener", use_container_width=True):
+        if st.button("Multi Screener", use_container_width=True, key="multi_screener_btn"):
             st.session_state["subpage"] = "Multi Screener"
     
     # Render subpage
@@ -118,7 +118,7 @@ def tarik_data_page():
 
 # =========== KONFIGURASI MENU NAVIGASI ===========
 pages = {
-    "Main Page": main_page,
+    "Halaman Utama": main_page,
     "Screener": screener_page,
     "Analisa": analisa_page,
     "Tarik Data": tarik_data_page,
@@ -131,7 +131,7 @@ with st.sidebar:
     st.markdown("---")
 
     selected = option_menu(
-        menu_title="Navigasi",
+        menu_title=None,  # Tidak ada judul menu
         options=list(pages.keys()),
         icons=["house", "search", "graph-up", "download"],
         menu_icon="cast",
@@ -150,7 +150,7 @@ with st.sidebar:
     )
 
 # Reset subpage jika kembali ke halaman utama
-if selected == "Main Page":
+if selected == "Halaman Utama":
     st.session_state["subpage"] = None
 
 # =========== RENDER HALAMAN YANG DIPILIH ===========
