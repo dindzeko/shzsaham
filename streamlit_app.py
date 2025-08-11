@@ -135,11 +135,10 @@ with st.sidebar:
 
     # Pastikan options tidak kosong
     menu_options = list(pages.keys())
-    if not menu_options:
-        menu_options = ["Halaman Utama"]
     
+    # Menggunakan menu_title kosong untuk menghilangkan judul
     selected = option_menu(
-        menu_title=None,
+        menu_title="",  # Judul kosong
         options=menu_options,
         icons=["house", "search", "graph-up", "download"],
         menu_icon="cast",
@@ -163,10 +162,6 @@ if selected == "Halaman Utama":
 
 # =========== RENDER HALAMAN YANG DIPILIH ===========
 try:
-    if selected in pages:
-        pages[selected]()
-    else:
-        # Fallback ke halaman utama jika pilihan tidak valid
-        pages["Halaman Utama"]()
+    pages[selected]()
 except Exception as e:
     st.error(f"Terjadi kesalahan saat memuat halaman: {str(e)}")
