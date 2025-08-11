@@ -14,11 +14,17 @@ def safe_import(module_name, alias=None, fallback=None):
                 globals()[alias or module_name] = fallback
         return fallback
 
-# Import menu
-safe_import(
+# Perbaiki fallback untuk option_menu
+def custom_option_menu_fallback(menu_title=None, options=None, **kwargs):
+    if not options:
+        options = []
+    return st.selectbox(menu_title or "Menu", options)
+
+# Import menu dengan fallback yang diperbaiki
+option_menu = safe_import(
     "streamlit_option_menu",
     alias="option_menu",
-    fallback=lambda **kwargs: st.selectbox(kwargs.get("menu_title", "Menu"), kwargs.get("options", []))
+    fallback=custom_option_menu_fallback
 )
 
 # CSS styling
@@ -46,12 +52,9 @@ try:
         st.info("🚧 Halaman Multi Screener sedang dalam pengembangan")
         st.write("Fitur ini akan segera hadir dalam versi berikutnya")
 except ImportError as e:
-    st.warning(f"⚠️ Gagal memuat modul: {e}")
-    
     # Fallback: fungsi dummy
     def pisau_jatuh_app(): 
         st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
-        st.error(f"Error details: {str(e)}")
     
     def multi_screener_app(): 
         st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
@@ -94,13 +97,13 @@ def screener_page():
             st.session_state["subpage"] = "Multi Screener"
     
     # Render subpage
-    if st.session_state["subpage"] == "Pisau Jatuh":
+    if st.session_state.get("subpage") == "Pisau Jatuh":
         st.subheader("⚙️ Pisau Jatuh")
         try:
             pisau_jatuh_app()
         except Exception as e:
             st.error(f"Terjadi kesalahan di halaman Pisau Jatuh: {str(e)}")
-    elif st.session_state["subpage"] == "Multi Screener":
+    elif st.session_state.get("subpage") == "Multi Screener":
         st.subheader("⚙️ Multi Screener")
         multi_screener_app()
 
@@ -130,9 +133,14 @@ with st.sidebar:
     st.markdown("### 📊 Audit & Screening Tools")
     st.markdown("---")
 
+    # Pastikan options tidak kosong
+    menu_options = list(pages.keys())
+    if not menu_options:
+        menu_options = ["Halaman Utama"]
+    
     selected = option_menu(
-        menu_title=None,  # Tidak ada judul menu
-        options=list(pages.keys()),
+        menu_title=None,
+        options=menu_options,
         icons=["house", "search", "graph-up", "download"],
         menu_icon="cast",
         default_index=0,
@@ -155,6 +163,10 @@ if selected == "Halaman Utama":
 
 # =========== RENDER HALAMAN YANG DIPILIH ===========
 try:
-    pages[selected]()
+    if selected in pages:
+        pages[selected]()
+    else:
+        # Fallback ke halaman utama jika pilihan tidak valid
+        pages["Halaman Utama"]()
 except Exception as e:
     st.error(f"Terjadi kesalahan saat memuat halaman: {str(e)}")
