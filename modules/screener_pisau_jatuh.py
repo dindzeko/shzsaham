@@ -1,83 +1,82 @@
 # modules/screener_pisau_jatuh.py
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import numpy as np
-import plotly.graph_objects as go
+import yfinance as yf
 from datetime import datetime, timedelta
 from sklearn.cluster import KMeans
 
-# ===================== FUNGSI TEKNIKAL =====================
+# =======================
+# Fungsi Load Data Google Sheets
+# =======================
+def load_google_drive_excel(file_url):
+    try:
+        file_id = file_url.split("/d/")[1].split("/")[0]
+        export_url = f"https://drive.google.com/uc?id={file_id}&export=download"
+        df = pd.read_excel(export_url)
+        return df
+    except Exception as e:
+        st.error(f"Gagal memuat file Google Drive: {e}")
+        return pd.DataFrame()
 
-def calculate_ma(data, period=20):
-    data[f"MA{period}"] = data['Close'].rolling(window=period).mean()
-    return data
+# =======================
+# Indikator Teknis
+# =======================
+def calculate_ma20(df):
+    df['MA20'] = df['Close'].rolling(window=20).mean()
+    return df
 
-def calculate_rsi(data, period=14):
-    delta = data['Close'].diff()
+def calculate_rsi(df, period=14):
+    delta = df['Close'].diff()
     gain = np.where(delta > 0, delta, 0)
     loss = np.where(delta < 0, -delta, 0)
-    avg_gain = pd.Series(gain).rolling(period).mean()
-    avg_loss = pd.Series(loss).rolling(period).mean()
+    avg_gain = pd.Series(gain).rolling(window=period).mean()
+    avg_loss = pd.Series(loss).rolling(window=period).mean()
     rs = avg_gain / avg_loss
-    data['RSI'] = 100 - (100 / (1 + rs))
-    return data
+    df['RSI'] = 100 - (100 / (1 + rs))
+    return df
 
-def calculate_mfi(data, period=14):
-    typical_price = (data['High'] + data['Low'] + data['Close']) / 3
-    money_flow = typical_price * data['Volume']
-    positive_flow = []
-    negative_flow = []
-
-    for i in range(1, len(typical_price)):
-        if typical_price[i] > typical_price[i - 1]:
-            positive_flow.append(money_flow[i - 1])
-            negative_flow.append(0)
-        elif typical_price[i] < typical_price[i - 1]:
-            negative_flow.append(money_flow[i - 1])
-            positive_flow.append(0)
-        else:
-            positive_flow.append(0)
-            negative_flow.append(0)
-
-    positive_mf = pd.Series(positive_flow).rolling(period).sum()
-    negative_mf = pd.Series(negative_flow).rolling(period).sum()
-
-    mfi = 100 * (positive_mf / (positive_mf + negative_mf))
-    data['MFI'] = mfi
-    return data
-
-def calculate_obv(data):
+def calculate_obv(df):
     obv = [0]
-    for i in range(1, len(data)):
-        if data['Close'][i] > data['Close'][i-1]:
-            obv.append(obv[-1] + data['Volume'][i])
-        elif data['Close'][i] < data['Close'][i-1]:
-            obv.append(obv[-1] - data['Volume'][i])
+    for i in range(1, len(df)):
+        if df['Close'][i] > df['Close'][i - 1]:
+            obv.append(obv[-1] + df['Volume'][i])
+        elif df['Close'][i] < df['Close'][i - 1]:
+            obv.append(obv[-1] - df['Volume'][i])
         else:
             obv.append(obv[-1])
-    data['OBV'] = obv
-    data['OBV_Interpretation'] = data['OBV'].diff().apply(
-        lambda x: "Tekanan Beli" if x > 0 else ("Tekanan Jual" if x < 0 else "Netral")
-    )
-    return data
+    df['OBV'] = obv
+    df['OBV_Interpretasi'] = np.where(df['OBV'].diff() > 0, 'Tekanan Beli',
+                                      np.where(df['OBV'].diff() < 0, 'Tekanan Jual', 'Netral'))
+    return df
 
-def calculate_volume_profile(data, bins=12):
-    prices = data['Close']
-    volumes = data['Volume']
-    hist, bin_edges = np.histogram(prices, bins=bins, weights=volumes)
-    vol_profile = pd.DataFrame({
-        'Price_Level': (bin_edges[:-1] + bin_edges[1:]) / 2,
-        'Volume': hist
-    })
-    vol_profile = vol_profile.sort_values(by='Volume', ascending=False)
-    support = vol_profile.iloc[-1]['Price_Level']
-    resistance = vol_profile.iloc[0]['Price_Level']
-    return support, resistance
+def calculate_mfi(df, period=14):
+    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
+    money_flow = typical_price * df['Volume']
+    positive_flow = []
+    negative_flow = []
+    for i in range(1, len(typical_price)):
+        if typical_price[i] > typical_price[i-1]:
+            positive_flow.append(money_flow[i-1])
+            negative_flow.append(0)
+        elif typical_price[i] < typical_price[i-1]:
+            positive_flow.append(0)
+            negative_flow.append(money_flow[i-1])
+        else:
+            positive_flow.append(0)
+            negative_flow.append(0)
+    positive_mf = pd.Series(positive_flow).rolling(window=period).sum()
+    negative_mf = pd.Series(negative_flow).rolling(window=period).sum()
+    mfi = 100 * (positive_mf / (positive_mf + negative_mf))
+    df['MFI'] = mfi.reindex(df.index, fill_value=np.nan)
+    return df
 
-def calculate_fibonacci(data):
-    max_price = data['High'].max()
-    min_price = data['Low'].min()
+# =======================
+# Fibonacci Retracement
+# =======================
+def calculate_fibonacci(df):
+    max_price = df['High'].max()
+    min_price = df['Low'].min()
     diff = max_price - min_price
     levels = {
         '0.0%': max_price,
@@ -89,66 +88,77 @@ def calculate_fibonacci(data):
     }
     return levels
 
-# ===================== FUNGSI SCREENING =====================
+# =======================
+# Volume Profile
+# =======================
+def calculate_volume_profile(df, bins=10):
+    df['price_bin'] = pd.cut(df['Close'], bins=bins)
+    volume_profile = df.groupby('price_bin')['Volume'].sum().reset_index()
+    max_volume_row = volume_profile.loc[volume_profile['Volume'].idxmax()]
+    return {
+        "Level Tertinggi Volume": max_volume_row['price_bin'],
+        "Volume Tertinggi": max_volume_row['Volume']
+    }
 
-def screen_falling_knife(df):
-    results = []
-    for ticker in df['Ticker']:
+# =======================
+# Screening Pisau Jatuh
+# =======================
+def is_falling_knife(df):
+    if len(df) < 4:
+        return False
+    last4 = df['Close'].tail(4).reset_index(drop=True)
+    return all(last4[i] < last4[i-1] for i in range(1, 4))
+
+# =======================
+# Fungsi Utama App
+# =======================
+def app():
+    st.title("📉 Screener Pisau Jatuh + Analisis Lanjutan")
+
+    file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
+    df_tickers = load_google_drive_excel(file_url)
+
+    if df_tickers.empty or 'Ticker' not in df_tickers.columns:
+        st.error("File tidak memiliki kolom 'Ticker'.")
+        return
+
+    tickers = df_tickers['Ticker'].dropna().unique().tolist()
+    hasil_screening = []
+
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=100)
+
+    for ticker in tickers:
         try:
-            data = yf.download(ticker, period="3mo", interval="1d", progress=False)
-            if data.empty or len(data) < 20:
+            data = yf.download(ticker, start=start_date, end=end_date)
+            if data.empty:
                 continue
 
-            data = calculate_ma(data)
+            data = calculate_ma20(data)
             data = calculate_rsi(data)
-            data = calculate_mfi(data)
             data = calculate_obv(data)
+            data = calculate_mfi(data)
 
-            support, resistance = calculate_volume_profile(data)
-            fibo_levels = calculate_fibonacci(data)
+            if is_falling_knife(data):
+                fibo_levels = calculate_fibonacci(data)
+                vol_profile = calculate_volume_profile(data)
 
-            latest = data.iloc[-1]
-            price = latest['Close']
-
-            # Deteksi pola "Pisau Jatuh" (turun berturut-turut min 3 hari)
-            close_changes = data['Close'].diff()
-            falling_days = (close_changes < 0).tail(3).sum()
-            is_falling_knife = falling_days >= 3
-
-            if is_falling_knife:
-                results.append({
-                    'Ticker': ticker,
-                    'Price': price,
-                    'MA20': latest['MA20'],
-                    'RSI': latest['RSI'],
-                    'MFI': latest['MFI'],
-                    'OBV Interpretasi': latest['OBV_Interpretation'],
-                    'Support (VP)': support,
-                    'Resistance (VP)': resistance,
-                    'Fibo Levels': fibo_levels
+                hasil_screening.append({
+                    "Ticker": ticker,
+                    "Close": data['Close'].iloc[-1],
+                    "MA20": data['MA20'].iloc[-1],
+                    "RSI": data['RSI'].iloc[-1],
+                    "OBV Interpretasi": data['OBV_Interpretasi'].iloc[-1],
+                    "MFI": data['MFI'].iloc[-1],
+                    "Fibonacci Levels": fibo_levels,
+                    "Volume Profile": vol_profile
                 })
         except Exception as e:
             st.warning(f"Error memproses {ticker}: {e}")
-    return pd.DataFrame(results)
 
-# ===================== FUNGSI STREAMLIT =====================
+    if hasil_screening:
+        df_hasil = pd.DataFrame(hasil_screening)
+        st.dataframe(df_hasil)
+    else:
+        st.info("Tidak ada saham yang memenuhi kriteria pisau jatuh.")
 
-def app():
-    st.title("📉 Screener Pisau Jatuh")
-    st.caption("Screening saham jatuh berturut-turut + Analisis Lanjutan")
-
-    uploaded_file = st.file_uploader("Upload daftar saham (.xlsx dengan kolom 'Ticker')", type=["xlsx"])
-    if uploaded_file is not None:
-        df_list = pd.read_excel(uploaded_file)
-        if 'Ticker' not in df_list.columns:
-            st.error("File harus memiliki kolom 'Ticker'")
-            return
-
-        with st.spinner("⏳ Sedang memproses screening..."):
-            results_df = screen_falling_knife(df_list)
-
-        if not results_df.empty:
-            st.success(f"✅ Ditemukan {len(results_df)} saham pola Pisau Jatuh")
-            st.dataframe(results_df)
-        else:
-            st.info("Tidak ada saham yang memenuhi kriteria.")
