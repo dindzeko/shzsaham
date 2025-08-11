@@ -4,21 +4,16 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
 import plotly.graph_objects as go
-from sklearn.cluster import KMeans
 from scipy.signal import argrelextrema
 
-# Inisialisasi session state (jika belum ada)
+# Inisialisasi session state
 if 'screening_results' not in st.session_state:
     st.session_state.screening_results = None
 if 'selected_ticker' not in st.session_state:
     st.session_state.selected_ticker = None
 
-
 # 1. PERBAIKAN MFI
 def compute_mfi(df, period=14):
-    """
-    Menghitung Money Flow Index (MFI) dengan metode yang benar
-    """
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     money_flow = tp * df['Volume']
     
@@ -47,9 +42,7 @@ def compute_mfi(df, period=14):
     
     return pd.Series(mfi, index=df.index)
 
-
 def interpret_mfi(mfi_value):
-    """Memberikan interpretasi sinyal MFI untuk trading"""
     if mfi_value >= 80:
         return "🔴 Overbought"
     elif mfi_value >= 65:
@@ -60,7 +53,6 @@ def interpret_mfi(mfi_value):
         return "🔴 Bearish"
     else:
         return "⚪ Neutral"
-
 
 # 2. SUPPORT/RESISTANCE DAN FIBONACCI
 def identify_significant_swings(df, window=60, min_swing_size=0.05):
@@ -94,7 +86,6 @@ def identify_significant_swings(df, window=60, min_swing_size=0.05):
     
     return swing_high, swing_low
 
-
 def calculate_fibonacci_levels(swing_high, swing_low):
     diff = swing_high - swing_low
     return {
@@ -107,19 +98,15 @@ def calculate_fibonacci_levels(swing_high, swing_low):
         'Fib_1.0': round(swing_low, 2)
     }
 
-
 def calculate_vwap(df):
-    """Menghitung Volume Weighted Average Price (VWAP)"""
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     vwap = (tp * df['Volume']).cumsum() / df['Volume'].cumsum()
     return vwap
-
 
 def find_psychological_levels(close_price):
     levels = [50, 100, 200, 500, 1000, 2000, 5000]
     closest_level = min(levels, key=lambda x: abs(x - close_price))
     return closest_level
-
 
 def calculate_support_resistance(data):
     df = data.copy()
@@ -161,8 +148,6 @@ def calculate_support_resistance(data):
         'Fibonacci': fib_levels
     }
 
-
-# 3. FUNGSI UTAMA DAN PENDUKUNG
 def load_google_drive_excel(file_url):
     try:
         file_id = file_url.split("/d/")[1].split("/")[0]
@@ -181,7 +166,6 @@ def load_google_drive_excel(file_url):
         st.error(f"Gagal membaca file: {e}")
         return None
 
-
 def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
@@ -191,7 +175,6 @@ def get_stock_data(ticker, end_date):
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
-
 
 def detect_pattern(data):
     if len(data) < 4:
@@ -216,7 +199,6 @@ def detect_pattern(data):
         is_close_sequence
     ])
 
-
 def compute_rsi(close, period=14):
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0)
@@ -228,7 +210,6 @@ def compute_rsi(close, period=14):
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
-
 
 def calculate_additional_metrics(data):
     df = data.copy()
@@ -261,7 +242,6 @@ def calculate_additional_metrics(data):
         "Resistance": sr_levels['Resistance'],
         "Fibonacci": sr_levels['Fibonacci']
     }
-
 
 # =========== FUNGSI UTAMA: app() ===========
 def app():
@@ -339,9 +319,7 @@ def app():
             if st.session_state.selected_ticker:
                 show_stock_details(st.session_state.selected_ticker, analysis_date)
 
-
 def show_stock_details(ticker, end_date):
-    """Menampilkan detail analisis teknis untuk saham terpilih"""
     data = get_stock_data(ticker, end_date)
     if data is None or data.empty:
         st.warning(f"Data untuk {ticker} tidak tersedia")
