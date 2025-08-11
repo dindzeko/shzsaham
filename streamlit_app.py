@@ -1,126 +1,160 @@
 import streamlit as st
-import pandas as pd
-import yfinance as yf
-from datetime import datetime, timedelta
-import numpy as np
-from sklearn.linear_model import LinearRegression
 
-# ====== HILANGKAN MENU MULTI-PAGE DEFAULT STREAMLIT ======
-hide_pages_style = """
-    <style>
-        [data-testid="stSidebarNav"] {display: none;}
-    </style>
-"""
-st.markdown(hide_pages_style, unsafe_allow_html=True)
+# ==== SAFE IMPORT (SILENT) ====
+def safe_import(module_name, alias=None, fallback=None):
+    try:
+        module = __import__(module_name, fromlist=["*"])
+        globals()[alias or module_name] = module
+        return module
+    except ModuleNotFoundError:
+        if fallback:
+            if callable(fallback):
+                globals()[alias or module_name] = fallback
+            else:
+                globals()[alias or module_name] = fallback
+        return fallback
 
-# ====== MENU SIDEBAR MANUAL ======
-menu = st.sidebar.radio(
-    "Pilih Fitur",
-    ["📊 Screener Multi", "🔪 Screener Pisau Jatuh"]
+# Import menu
+safe_import(
+    "streamlit_option_menu",
+    alias="option_menu",
+    fallback=lambda **kwargs: st.selectbox(kwargs.get("menu_title", "Menu"), kwargs.get("options", []))
 )
 
-# ====== FUNGSI PEMBACAAN DATA GOOGLE DRIVE ======
-def load_google_drive_excel(file_url):
-    try:
-        file_id = file_url.split("/d/")[1].split("/")[0]
-        download_url = f"https://drive.google.com/uc?id={file_id}"
-        return pd.read_excel(download_url)
-    except Exception as e:
-        st.error(f"Gagal membaca file: {e}")
-        return None
+# CSS styling
+def add_css(css):
+    st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-# ====== FUNGSI ANALISIS TEKNIKAL ======
-def calculate_rsi(data, period=14):
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+css_styles = """
+<style>
+h1 {
+    font-size: 2.5rem;
+    color: #2c3e50;
+}
+.sidebar .sidebar-content {
+    background-color: #f8f9fa;
+}
+</style>
+"""
+add_css(css_styles)
 
-def calculate_ma(data, period=20):
-    return data['Close'].rolling(window=period).mean()
+# Impor halaman dari folder pages/
+try:
+    from pages.screener_pisau_jatuh import app as pisau_jatuh_app
+    # Temporary fallback for screener_multi
+    def multi_screener_app(): 
+        st.info("🚧 Halaman Multi Screener sedang dalam pengembangan")
+        st.write("Fitur ini akan segera hadir dalam versi berikutnya")
+except ImportError as e:
+    st.warning(f"⚠️ Gagal memuat modul: {e}")
+    
+    # Fallback: fungsi dummy
+    def pisau_jatuh_app(): 
+        st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
+        st.error(f"Error details: {str(e)}")
+    
+    def multi_screener_app(): 
+        st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
 
-def calculate_obv(data):
-    obv = (np.sign(data['Close'].diff()) * data['Volume']).fillna(0).cumsum()
-    if obv.iloc[-1] > obv.iloc[-20:].mean():
-        return "Tekanan Beli"
-    elif obv.iloc[-1] < obv.iloc[-20:].mean():
-        return "Tekanan Jual"
-    else:
-        return "Netral"
+# Fungsi fallback untuk halaman lain
+def analisa_app(): st.write("📊 Halaman Analisa belum diimplementasikan.")
+def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.")
 
-def calculate_mfi(data, period=14):
-    typical_price = (data['High'] + data['Low'] + data['Close']) / 3
-    money_flow = typical_price * data['Volume']
-    positive_flow = []
-    negative_flow = []
+# Inisialisasi session state
+if "subpage" not in st.session_state:
+    st.session_state["subpage"] = None
 
-    for i in range(1, len(typical_price)):
-        if typical_price[i] > typical_price[i-1]:
-            positive_flow.append(money_flow[i-1])
-            negative_flow.append(0)
-        elif typical_price[i] < typical_price[i-1]:
-            positive_flow.append(0)
-            negative_flow.append(money_flow[i-1])
-        else:
-            positive_flow.append(0)
-            negative_flow.append(0)
+# =========== HALAMAN UTAMA ===========
+def main_page():
+    st.title("🎯 Selamat Datang di Aplikasi Screener & Analisis")
+    st.markdown("""
+    Aplikasi ini dirancang untuk membantu proses **screening data**, **analisis cepat**, dan **pengambilan data** secara efisien.
+    
+    Pilih menu di sidebar untuk mulai:
+    
+    - **Screener**: Lakukan screening data dengan berbagai metode
+    - **Analisa**: Analisis data yang sudah diambil
+    - **Tarik Data**: Ekstraksi data dari sumber eksternal
+    
+    Gunakan sub-menu jika tersedia.
+    """)
 
-    positive_mf = pd.Series(positive_flow).rolling(window=period).sum()
-    negative_mf = pd.Series(negative_flow).rolling(window=period).sum()
+# =========== HALAMAN SCREENER ===========
+def screener_page():
+    st.title("🔍 Screener")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("Pisau Jatuh", use_container_width=True):
+            st.session_state["subpage"] = "Pisau Jatuh"
+    
+    with col2:
+        if st.button("Multi Screener", use_container_width=True):
+            st.session_state["subpage"] = "Multi Screener"
+    
+    # Render subpage
+    if st.session_state["subpage"] == "Pisau Jatuh":
+        st.subheader("⚙️ Pisau Jatuh")
+        try:
+            pisau_jatuh_app()
+        except Exception as e:
+            st.error(f"Terjadi kesalahan di halaman Pisau Jatuh: {str(e)}")
+    elif st.session_state["subpage"] == "Multi Screener":
+        st.subheader("⚙️ Multi Screener")
+        multi_screener_app()
 
-    mfi = 100 * (positive_mf / (positive_mf + negative_mf))
-    return mfi
+# =========== HALAMAN ANALISA ===========
+def analisa_page():
+    st.title("📊 Analisa")
+    st.session_state["subpage"] = None  # Reset subpage
+    analisa_app()
 
-# ====== HALAMAN SCREENER MULTI ======
-if menu == "📊 Screener Multi":
-    st.title("📊 Screener Multi")
-    file_url = st.text_input("Masukkan URL Google Drive untuk data saham")
+# =========== HALAMAN TARIK DATA ===========
+def tarik_data_page():
+    st.title("📥 Tarik Data")
+    st.session_state["subpage"] = None  # Reset subpage
+    tarik_data_app()
 
-    if file_url:
-        df_list = load_google_drive_excel(file_url)
-        if df_list is not None:
-            results = []
-            for ticker in df_list['Ticker']:
-                try:
-                    data = yf.download(ticker, period="3mo")
-                    data['MA20'] = calculate_ma(data)
-                    data['RSI'] = calculate_rsi(data)
-                    data['OBV_Status'] = calculate_obv(data)
-                    data['MFI'] = calculate_mfi(data)
+# =========== KONFIGURASI MENU NAVIGASI ===========
+pages = {
+    "Main Page": main_page,
+    "Screener": screener_page,
+    "Analisa": analisa_page,
+    "Tarik Data": tarik_data_page,
+}
 
-                    last_row = data.iloc[-1]
-                    results.append({
-                        "Ticker": ticker,
-                        "Close": last_row['Close'],
-                        "MA20": last_row['MA20'],
-                        "RSI": last_row['RSI'],
-                        "OBV": last_row['OBV_Status'],
-                        "MFI": last_row['MFI']
-                    })
-                except Exception as e:
-                    st.warning(f"Gagal memproses {ticker}: {e}")
+# =========== SIDEBAR MENU ===========
+with st.sidebar:
+    st.image("https://via.placeholder.com/150/007BFF/FFFFFF?text=AppLogo", width=120)
+    st.markdown("### 📊 Audit & Screening Tools")
+    st.markdown("---")
 
-            st.dataframe(pd.DataFrame(results))
+    selected = option_menu(
+        menu_title="Navigasi",
+        options=list(pages.keys()),
+        icons=["house", "search", "graph-up", "download"],
+        menu_icon="cast",
+        default_index=0,
+        styles={
+            "container": {"padding": "0!important", "background-color": "#fafafa"},
+            "icon": {"color": "orange", "font-size": "20px"},
+            "nav-link": {
+                "font-size": "16px",
+                "text-align": "left",
+                "margin": "0px",
+                "--hover-color": "#eee",
+            },
+            "nav-link-selected": {"background-color": "#007BFF"},
+        },
+    )
 
-# ====== HALAMAN SCREENER PISAU JATUH ======
-elif menu == "🔪 Screener Pisau Jatuh":
-    st.title("🔪 Screener Pisau Jatuh")
-    tickers = st.text_area("Masukkan daftar ticker (pisahkan dengan koma)")
+# Reset subpage jika kembali ke halaman utama
+if selected == "Main Page":
+    st.session_state["subpage"] = None
 
-    if tickers:
-        ticker_list = [t.strip() for t in tickers.split(",")]
-        results = []
-        for ticker in ticker_list:
-            try:
-                data = yf.download(ticker, period="3mo")
-                change = (data['Close'].iloc[-1] - data['Close'].iloc[-5]) / data['Close'].iloc[-5] * 100
-                if change < -10:  # Contoh kriteria "pisau jatuh"
-                    results.append({"Ticker": ticker, "Perubahan 5 Hari (%)": change})
-            except Exception as e:
-                st.warning(f"Gagal memproses {ticker}: {e}")
-
-        if results:
-            st.dataframe(pd.DataFrame(results))
-        else:
-            st.info("Tidak ada saham yang terdeteksi sebagai 'Pisau Jatuh'.")
+# =========== RENDER HALAMAN YANG DIPILIH ===========
+try:
+    pages[selected]()
+except Exception as e:
+    st.error(f"Terjadi kesalahan saat memuat halaman: {str(e)}")
