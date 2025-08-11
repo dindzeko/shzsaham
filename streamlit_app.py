@@ -3,66 +3,53 @@ from streamlit_option_menu import option_menu
 import pandas as pd
 import datetime
 
-# ========== CSS ==========
+# ===== CSS Styling =====
 def add_css(css):
-    st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 css_styles = """
-/* Styling untuk judul utama */
-h1 {
-    font-size: 2.2rem;
-    color: #333;
-}
-/* Styling untuk deskripsi */
-p {
-    font-size: 1rem;
-    color: #555;
-}
+/* Judul utama */
+h1 { font-size: 2.2rem; color: #333; }
+/* Deskripsi */
+p { font-size: 1rem; color: #555; }
 /* Sidebar */
-.sidebar .sidebar-content {
-    padding: 20px;
-    background-color: #f9f9f9;
-}
+.sidebar .sidebar-content { padding: 20px; background-color: #f9f9f9; }
 /* Tombol lebar penuh */
-.stButton > button {
-    width: 100%;
-}
+.stButton > button { width: 100%; }
 """
 add_css(css_styles)
 
-# ========== IMPORT PAGE ==========
+# ===== IMPORT MODULE MANUAL =====
 try:
-    from pages.screener_pisau_jatuh import app as pisau_jatuh_app
+    from modules.screener_pisau_jatuh import app as pisau_jatuh_app
 except ImportError:
     def pisau_jatuh_app():
         st.warning("🚧 Halaman Pisau Jatuh belum tersedia.")
 
-# Placeholder Multi Screener
-def multi_screener_app():
-    st.info("🚧 Halaman Multi Screener sedang dalam pengembangan.")
+try:
+    from modules.screener_multi import app as multi_screener_app
+except ImportError:
+    def multi_screener_app():
+        st.warning("🚧 Halaman Multi Screener belum tersedia.")
 
-# Placeholder Analisa
-def analisa_app():
-    st.info("📊 Halaman Analisa belum diimplementasikan.")
+# Placeholder halaman lain
+def analisa_app(): st.info("📊 Halaman Analisa belum diimplementasikan.")
+def tarik_data_app(): st.info("📥 Halaman Tarik Data belum diimplementasikan.")
 
-# Placeholder Tarik Data
-def tarik_data_app():
-    st.info("📥 Halaman Tarik Data belum diimplementasikan.")
-
-# ========== SESSION STATE ==========
+# ===== SESSION STATE =====
 if "subpage" not in st.session_state:
     st.session_state["subpage"] = None
 
-# ========== HALAMAN ==========
+# ===== HALAMAN =====
 def main_page():
     st.title("🎯 Selamat Datang di Aplikasi Screener & Analisis")
     st.write("""
     Aplikasi ini membantu proses **screening data**, **analisis cepat**, dan **pengambilan data**.
-    
+
     Modul utama:
-    - **Screener**: Screening saham / data dengan berbagai metode
-    - **Analisa**: Analisis data hasil screening
-    - **Tarik Data**: Ambil data dari sumber eksternal
+    - **Screener**
+    - **Analisa**
+    - **Tarik Data**
     """)
 
 def screener():
@@ -92,7 +79,7 @@ def tarik_data():
     st.session_state["subpage"] = None
     tarik_data_app()
 
-# ========== PAGE CONFIG ==========
+# ===== PAGE CONFIG =====
 page_config = {
     "Halaman Utama": main_page,
     "Screener": screener,
@@ -100,7 +87,7 @@ page_config = {
     "Tarik Data": tarik_data
 }
 
-# ========== SIDEBAR ==========
+# ===== SIDEBAR =====
 with st.sidebar:
     selected = option_menu(
         menu_title="📊 Screener & Analisis",
@@ -114,11 +101,8 @@ with st.sidebar:
 if selected == "Halaman Utama":
     st.session_state["subpage"] = None
 
-# ========== RENDER HALAMAN ==========
+# ===== RENDER HALAMAN =====
 try:
-    if selected in page_config:
-        page_config[selected]()
-    else:
-        st.error("Halaman tidak ditemukan.")
+    page_config[selected]()
 except Exception as e:
     st.error(f"Terjadi kesalahan: {str(e)}")
