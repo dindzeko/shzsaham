@@ -1,153 +1,154 @@
 # modules/screener_pisau_jatuh.py
-
 import streamlit as st
 import pandas as pd
-import numpy as np
 import yfinance as yf
+import numpy as np
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from sklearn.cluster import KMeans
 
-# ===================== Fungsi Analisis Teknis ===================== #
+# ===================== FUNGSI TEKNIKAL =====================
 
-def calculate_ma20(df):
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    return df
+def calculate_ma(data, period=20):
+    data[f"MA{period}"] = data['Close'].rolling(window=period).mean()
+    return data
 
-def calculate_rsi(df, period=14):
-    delta = df['Close'].diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.rolling(period).mean()
-    avg_loss = loss.rolling(period).mean()
+def calculate_rsi(data, period=14):
+    delta = data['Close'].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).rolling(period).mean()
+    avg_loss = pd.Series(loss).rolling(period).mean()
     rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    return df
+    data['RSI'] = 100 - (100 / (1 + rs))
+    return data
 
-def calculate_obv(df):
-    obv = [0]
-    for i in range(1, len(df)):
-        if df['Close'].iloc[i] > df['Close'].iloc[i-1]:
-            obv.append(obv[-1] + df['Volume'].iloc[i])
-        elif df['Close'].iloc[i] < df['Close'].iloc[i-1]:
-            obv.append(obv[-1] - df['Volume'].iloc[i])
-        else:
-            obv.append(obv[-1])
-    df['OBV'] = obv
-
-    # Interpretasi OBV
-    if df['OBV'].iloc[-1] > df['OBV'].iloc[-5]:
-        df['OBV_Interpretasi'] = "Tekanan Beli"
-    elif df['OBV'].iloc[-1] < df['OBV'].iloc[-5]:
-        df['OBV_Interpretasi'] = "Tekanan Jual"
-    else:
-        df['OBV_Interpretasi'] = "Netral"
-
-    return df
-
-def calculate_mfi(df, period=14):
-    typical_price = (df['High'] + df['Low'] + df['Close']) / 3
-    money_flow = typical_price * df['Volume']
-
+def calculate_mfi(data, period=14):
+    typical_price = (data['High'] + data['Low'] + data['Close']) / 3
+    money_flow = typical_price * data['Volume']
     positive_flow = []
     negative_flow = []
-    for i in range(1, len(df)):
-        if typical_price.iloc[i] > typical_price.iloc[i-1]:
-            positive_flow.append(money_flow.iloc[i])
+
+    for i in range(1, len(typical_price)):
+        if typical_price[i] > typical_price[i - 1]:
+            positive_flow.append(money_flow[i - 1])
             negative_flow.append(0)
-        elif typical_price.iloc[i] < typical_price.iloc[i-1]:
+        elif typical_price[i] < typical_price[i - 1]:
+            negative_flow.append(money_flow[i - 1])
             positive_flow.append(0)
-            negative_flow.append(money_flow.iloc[i])
         else:
             positive_flow.append(0)
             negative_flow.append(0)
 
-    positive_mf = pd.Series(positive_flow).rolling(window=period).sum()
-    negative_mf = pd.Series(negative_flow).rolling(window=period).sum()
+    positive_mf = pd.Series(positive_flow).rolling(period).sum()
+    negative_mf = pd.Series(negative_flow).rolling(period).sum()
+
     mfi = 100 * (positive_mf / (positive_mf + negative_mf))
-    mfi = mfi.reindex(df.index, method='pad')
-    df['MFI'] = mfi
-    return df
+    data['MFI'] = mfi
+    return data
 
-def calculate_volume_profile(df, bins=12):
-    price = df['Close']
-    volume = df['Volume']
+def calculate_obv(data):
+    obv = [0]
+    for i in range(1, len(data)):
+        if data['Close'][i] > data['Close'][i-1]:
+            obv.append(obv[-1] + data['Volume'][i])
+        elif data['Close'][i] < data['Close'][i-1]:
+            obv.append(obv[-1] - data['Volume'][i])
+        else:
+            obv.append(obv[-1])
+    data['OBV'] = obv
+    data['OBV_Interpretation'] = data['OBV'].diff().apply(
+        lambda x: "Tekanan Beli" if x > 0 else ("Tekanan Jual" if x < 0 else "Netral")
+    )
+    return data
 
-    hist, bin_edges = np.histogram(price, bins=bins, weights=volume)
-    vol_profile = pd.DataFrame({'price_level': bin_edges[:-1], 'volume': hist})
-    high_vol = vol_profile.loc[vol_profile['volume'].idxmax(), 'price_level']
-    low_vol = vol_profile.loc[vol_profile['volume'].idxmin(), 'price_level']
-    return round(low_vol, 2), round(high_vol, 2)
+def calculate_volume_profile(data, bins=12):
+    prices = data['Close']
+    volumes = data['Volume']
+    hist, bin_edges = np.histogram(prices, bins=bins, weights=volumes)
+    vol_profile = pd.DataFrame({
+        'Price_Level': (bin_edges[:-1] + bin_edges[1:]) / 2,
+        'Volume': hist
+    })
+    vol_profile = vol_profile.sort_values(by='Volume', ascending=False)
+    support = vol_profile.iloc[-1]['Price_Level']
+    resistance = vol_profile.iloc[0]['Price_Level']
+    return support, resistance
 
-def calculate_fibonacci_levels(df):
-    high_price = df['High'].max()
-    low_price = df['Low'].min()
-    diff = high_price - low_price
+def calculate_fibonacci(data):
+    max_price = data['High'].max()
+    min_price = data['Low'].min()
+    diff = max_price - min_price
     levels = {
-        'Fibo_0.236': high_price - 0.236 * diff,
-        'Fibo_0.382': high_price - 0.382 * diff,
-        'Fibo_0.5': high_price - 0.5 * diff,
-        'Fibo_0.618': high_price - 0.618 * diff,
-        'Fibo_0.786': high_price - 0.786 * diff
+        '0.0%': max_price,
+        '23.6%': max_price - 0.236 * diff,
+        '38.2%': max_price - 0.382 * diff,
+        '50.0%': max_price - 0.5 * diff,
+        '61.8%': max_price - 0.618 * diff,
+        '100.0%': min_price
     }
-    return {k: round(v, 2) for k, v in levels.items()}
+    return levels
 
-# ===================== Screening Pisau Jatuh ===================== #
+# ===================== FUNGSI SCREENING =====================
 
-def screening_pisau_jatuh(symbols):
+def screen_falling_knife(df):
     results = []
-
-    for symbol in symbols:
+    for ticker in df['Ticker']:
         try:
-            df = yf.download(symbol, period="3mo", interval="1d", progress=False)
-            if df.empty or len(df) < 20:
+            data = yf.download(ticker, period="3mo", interval="1d", progress=False)
+            if data.empty or len(data) < 20:
                 continue
 
-            df = calculate_ma20(df)
-            df = calculate_rsi(df)
-            df = calculate_obv(df)
-            df = calculate_mfi(df)
+            data = calculate_ma(data)
+            data = calculate_rsi(data)
+            data = calculate_mfi(data)
+            data = calculate_obv(data)
 
-            low_vol, high_vol = calculate_volume_profile(df)
-            fibo_levels = calculate_fibonacci_levels(df)
+            support, resistance = calculate_volume_profile(data)
+            fibo_levels = calculate_fibonacci(data)
 
-            # Logika screening "Pisau Jatuh" — contoh sederhana:
-            last_close = df['Close'].iloc[-1]
-            ma20 = df['MA20'].iloc[-1]
-            rsi = df['RSI'].iloc[-1]
+            latest = data.iloc[-1]
+            price = latest['Close']
 
-            if (last_close < ma20) and (rsi < 30):
+            # Deteksi pola "Pisau Jatuh" (turun berturut-turut min 3 hari)
+            close_changes = data['Close'].diff()
+            falling_days = (close_changes < 0).tail(3).sum()
+            is_falling_knife = falling_days >= 3
+
+            if is_falling_knife:
                 results.append({
-                    "Kode": symbol,
-                    "Close": round(last_close, 2),
-                    "MA20": round(ma20, 2),
-                    "RSI": round(rsi, 2),
-                    "OBV": df['OBV_Interpretasi'].iloc[-1],
-                    "MFI": round(df['MFI'].iloc[-1], 2),
-                    "Support_VP": low_vol,
-                    "Resistance_VP": high_vol,
-                    **fibo_levels
+                    'Ticker': ticker,
+                    'Price': price,
+                    'MA20': latest['MA20'],
+                    'RSI': latest['RSI'],
+                    'MFI': latest['MFI'],
+                    'OBV Interpretasi': latest['OBV_Interpretation'],
+                    'Support (VP)': support,
+                    'Resistance (VP)': resistance,
+                    'Fibo Levels': fibo_levels
                 })
-
         except Exception as e:
-            print(f"Error {symbol}: {e}")
-            continue
-
+            st.warning(f"Error memproses {ticker}: {e}")
     return pd.DataFrame(results)
 
-# ===================== Fungsi Utama untuk Streamlit ===================== #
+# ===================== FUNGSI STREAMLIT =====================
 
-def run():
-    st.title("📉 Screener Pisau Jatuh + Analisis Lanjutan")
+def app():
+    st.title("📉 Screener Pisau Jatuh")
+    st.caption("Screening saham jatuh berturut-turut + Analisis Lanjutan")
 
-    symbols_input = st.text_area("Masukkan kode saham (pisahkan dengan koma)", "BBCA.JK, BBRI.JK, TLKM.JK")
-    symbols = [s.strip() for s in symbols_input.split(",") if s.strip()]
+    uploaded_file = st.file_uploader("Upload daftar saham (.xlsx dengan kolom 'Ticker')", type=["xlsx"])
+    if uploaded_file is not None:
+        df_list = pd.read_excel(uploaded_file)
+        if 'Ticker' not in df_list.columns:
+            st.error("File harus memiliki kolom 'Ticker'")
+            return
 
-    if st.button("Screening"):
-        with st.spinner("Sedang memproses..."):
-            results_df = screening_pisau_jatuh(symbols)
+        with st.spinner("⏳ Sedang memproses screening..."):
+            results_df = screen_falling_knife(df_list)
 
         if not results_df.empty:
-            st.success(f"Ditemukan {len(results_df)} saham yang memenuhi kriteria.")
+            st.success(f"✅ Ditemukan {len(results_df)} saham pola Pisau Jatuh")
             st.dataframe(results_df)
         else:
-            st.warning("Tidak ada saham yang memenuhi kriteria.")
+            st.info("Tidak ada saham yang memenuhi kriteria.")
