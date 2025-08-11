@@ -14,7 +14,7 @@ def safe_import(module_name, alias=None, fallback=None):
                 globals()[alias or module_name] = fallback
         return fallback
 
-# Import menu (pakai selectbox kalau option_menu tidak ada)
+# Import menu
 safe_import(
     "streamlit_option_menu",
     alias="option_menu",
@@ -41,17 +41,24 @@ add_css(css_styles)
 # Impor halaman dari folder pages/
 try:
     from pages.screener_pisau_jatuh import app as pisau_jatuh_app
-    from pages.screener_multi import app as multi_screener_app
-    from pages.analisa import app as analisa_app
-    from pages.tarik_data import app as tarik_data_app
+    # Temporary fallback for screener_multi
+    def multi_screener_app(): 
+        st.info("🚧 Halaman Multi Screener sedang dalam pengembangan")
+        st.write("Fitur ini akan segera hadir dalam versi berikutnya")
 except ImportError as e:
     st.warning(f"⚠️ Gagal memuat modul: {e}")
     
     # Fallback: fungsi dummy
-    def pisau_jatuh_app(): st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
-    def multi_screener_app(): st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
-    def analisa_app(): st.write("📊 Halaman Analisa belum diimplementasikan.")
-    def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.")
+    def pisau_jatuh_app(): 
+        st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
+        st.error(f"Error details: {str(e)}")
+    
+    def multi_screener_app(): 
+        st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
+
+# Fungsi fallback untuk halaman lain
+def analisa_app(): st.write("📊 Halaman Analisa belum diimplementasikan.")
+def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.")
 
 # Inisialisasi session state
 if "subpage" not in st.session_state:
@@ -89,7 +96,10 @@ def screener_page():
     # Render subpage
     if st.session_state["subpage"] == "Pisau Jatuh":
         st.subheader("⚙️ Pisau Jatuh")
-        pisau_jatuh_app()
+        try:
+            pisau_jatuh_app()
+        except Exception as e:
+            st.error(f"Terjadi kesalahan di halaman Pisau Jatuh: {str(e)}")
     elif st.session_state["subpage"] == "Multi Screener":
         st.subheader("⚙️ Multi Screener")
         multi_screener_app()
