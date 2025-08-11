@@ -33,12 +33,27 @@ def add_css(css):
 
 css_styles = """
 <style>
+/* Styling untuk judul utama */
 h1 {
     font-size: 2.5rem;
-    color: #2c3e50;
+    color: #333;
 }
+
+/* Styling untuk deskripsi */
+p {
+    font-size: 1.2rem;
+    color: #555;
+}
+
+/* Styling untuk sidebar */
 .sidebar .sidebar-content {
-    background-color: #f8f9fa;
+    padding: 20px;
+    background-color: #f9f9f9;
+}
+
+/* Sembunyikan elemen yang tidak diinginkan */
+.hidden-element {
+    display: none !important;
 }
 </style>
 """
@@ -70,7 +85,7 @@ if "subpage" not in st.session_state:
 # =========== HALAMAN UTAMA ===========
 def main_page():
     st.title("🎯 Selamat Datang di Aplikasi Screener & Analisis")
-    st.markdown("""
+    st.write("""
     Aplikasi ini dirancang untuk membantu proses **screening data**, **analisis cepat**, dan **pengambilan data** secara efisien.
     
     Pilih menu di sidebar untuk mulai:
@@ -129,10 +144,13 @@ pages = {
 
 # =========== SIDEBAR MENU ===========
 with st.sidebar:
+    # Sembunyikan elemen yang tidak diinginkan
+    st.markdown('<div class="hidden-element">', unsafe_allow_html=True)
+    
     st.image("https://via.placeholder.com/150/007BFF/FFFFFF?text=AppLogo", width=120)
     st.markdown("### 📊 Audit & Screening Tools")
     st.markdown("---")
-
+    
     # Pastikan options tidak kosong
     menu_options = list(pages.keys())
     
@@ -155,6 +173,8 @@ with st.sidebar:
             "nav-link-selected": {"background-color": "#007BFF"},
         },
     )
+    
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # Reset subpage jika kembali ke halaman utama
 if selected == "Halaman Utama":
