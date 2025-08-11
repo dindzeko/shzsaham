@@ -1,36 +1,13 @@
 import streamlit as st
+from streamlit_option_menu import option_menu
+import pandas as pd
+import datetime
 
-# ==== SAFE IMPORT (SILENT) ====
-def safe_import(module_name, alias=None, fallback=None):
-    try:
-        module = __import__(module_name, fromlist=["*"])
-        globals()[alias or module_name] = module
-        return module
-    except ModuleNotFoundError:
-        if fallback:
-            if callable(fallback):
-                globals()[alias or module_name] = fallback
-            else:
-                globals()[alias or module_name] = fallback
-        return fallback
-
-# Perbaiki fallback untuk option_menu
-def custom_option_menu_fallback(menu_title=None, options=None, **kwargs):
-    if not options:
-        options = []
-    return st.selectbox(menu_title or "Menu", options)
-
-# Import menu dengan fallback yang diperbaiki
-option_menu = safe_import(
-    "streamlit_option_menu",
-    alias="option_menu",
-    fallback=custom_option_menu_fallback
-)
-
-# CSS styling
+# Fungsi untuk menambahkan CSS
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
+# CSS styling
 css_styles = """
 <style>
 /* Styling untuk judul utama */
@@ -51,30 +28,30 @@ p {
     background-color: #f9f9f9;
 }
 
-/* Sembunyikan elemen yang tidak diinginkan */
-.hidden-element {
-    display: none !important;
+/* Styling untuk tombol */
+.stButton>button {
+    width: 100%;
 }
 </style>
 """
 add_css(css_styles)
 
-# Impor halaman dari folder pages/
+# Impor halaman dari folder `pages/`
 try:
     from pages.screener_pisau_jatuh import app as pisau_jatuh_app
-    # Temporary fallback for screener_multi
+    # Fungsi dummy untuk multi screener
     def multi_screener_app(): 
         st.info("🚧 Halaman Multi Screener sedang dalam pengembangan")
         st.write("Fitur ini akan segera hadir dalam versi berikutnya")
 except ImportError as e:
+    st.error(f"Error importing modules: {str(e)}")
     # Fallback: fungsi dummy
     def pisau_jatuh_app(): 
         st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
-    
     def multi_screener_app(): 
         st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
 
-# Fungsi fallback untuk halaman lain
+# Fungsi dummy untuk halaman lain
 def analisa_app(): st.write("📊 Halaman Analisa belum diimplementasikan.")
 def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.")
 
@@ -82,7 +59,7 @@ def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.
 if "subpage" not in st.session_state:
     st.session_state["subpage"] = None
 
-# =========== HALAMAN UTAMA ===========
+# ----------- HALAMAN UTAMA -----------
 def main_page():
     st.title("🎯 Selamat Datang di Aplikasi Screener & Analisis")
     st.write("""
@@ -97,18 +74,18 @@ def main_page():
     Gunakan sub-menu jika tersedia.
     """)
 
-# =========== HALAMAN SCREENER ===========
+# ----------- HALAMAN SCREENER -----------
 def screener_page():
     st.title("🔍 Screener")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        if st.button("Pisau Jatuh", use_container_width=True, key="pisau_jatuh_btn"):
+        if st.button("Pisau Jatuh", use_container_width=True):
             st.session_state["subpage"] = "Pisau Jatuh"
     
     with col2:
-        if st.button("Multi Screener", use_container_width=True, key="multi_screener_btn"):
+        if st.button("Multi Screener", use_container_width=True):
             st.session_state["subpage"] = "Multi Screener"
     
     # Render subpage
@@ -117,71 +94,56 @@ def screener_page():
         try:
             pisau_jatuh_app()
         except Exception as e:
-            st.error(f"Terjadi kesalahan di halaman Pisau Jatuh: {str(e)}")
+            st.error(f"Error: {str(e)}")
     elif st.session_state.get("subpage") == "Multi Screener":
         st.subheader("⚙️ Multi Screener")
         multi_screener_app()
 
-# =========== HALAMAN ANALISA ===========
+# ----------- HALAMAN ANALISA -----------
 def analisa_page():
     st.title("📊 Analisa")
     st.session_state["subpage"] = None  # Reset subpage
     analisa_app()
 
-# =========== HALAMAN TARIK DATA ===========
+# ----------- HALAMAN TARIK DATA -----------
 def tarik_data_page():
     st.title("📥 Tarik Data")
     st.session_state["subpage"] = None  # Reset subpage
     tarik_data_app()
 
-# =========== KONFIGURASI MENU NAVIGASI ===========
-pages = {
+# ----------- KONFIGURASI NAVIGASI -----------
+page_config = {
     "Halaman Utama": main_page,
     "Screener": screener_page,
     "Analisa": analisa_page,
     "Tarik Data": tarik_data_page,
 }
 
-# =========== SIDEBAR MENU ===========
+# ----------- SIDEBAR -----------
 with st.sidebar:
-    # Sembunyikan elemen yang tidak diinginkan
-    st.markdown('<div class="hidden-element">', unsafe_allow_html=True)
-    
     st.image("https://via.placeholder.com/150/007BFF/FFFFFF?text=AppLogo", width=120)
     st.markdown("### 📊 Audit & Screening Tools")
     st.markdown("---")
     
-    # Pastikan options tidak kosong
-    menu_options = list(pages.keys())
-    
-    # Menggunakan menu_title kosong untuk menghilangkan judul
     selected = option_menu(
-        menu_title="",  # Judul kosong
-        options=menu_options,
+        menu_title=None,  # Tidak ada judul menu
+        options=list(page_config.keys()),
         icons=["house", "search", "graph-up", "download"],
         menu_icon="cast",
         default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "#fafafa"},
-            "icon": {"color": "orange", "font-size": "20px"},
-            "nav-link": {
-                "font-size": "16px",
-                "text-align": "left",
-                "margin": "0px",
-                "--hover-color": "#eee",
-            },
-            "nav-link-selected": {"background-color": "#007BFF"},
-        },
     )
-    
-    st.markdown('</div>', unsafe_allow_html=True)
 
-# Reset subpage jika kembali ke halaman utama
+# Reset session state jika kembali ke halaman utama
 if selected == "Halaman Utama":
     st.session_state["subpage"] = None
 
-# =========== RENDER HALAMAN YANG DIPILIH ===========
+# ----------- RENDER HALAMAN -----------
 try:
-    pages[selected]()
+    if selected in page_config:
+        page_config[selected]()
+    else:
+        st.error("Halaman tidak ditemukan. Silakan pilih halaman lain dari menu navigasi.")
+except KeyError as e:
+    st.error(f"Kesalahan: Halaman '{selected}' tidak ditemukan.")
 except Exception as e:
-    st.error(f"Terjadi kesalahan saat memuat halaman: {str(e)}")
+    st.error(f"Terjadi kesalahan: {str(e)}")
