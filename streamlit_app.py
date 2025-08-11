@@ -18,10 +18,10 @@ def safe_import(module_name, alias=None, fallback=None):
 safe_import(
     "streamlit_option_menu",
     alias="option_menu",
-    fallback=lambda **kwargs: st.selectbox(kwargs.get("menu_title","Menu"), kwargs.get("options", []))
+    fallback=lambda **kwargs: st.selectbox(kwargs.get("menu_title", "Menu"), kwargs.get("options", []))
 )
 
-# CSS
+# CSS styling
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
@@ -38,23 +38,26 @@ h1 {
 """
 add_css(css_styles)
 
-# Halaman (silent fallback)
+# Impor halaman dari folder pages/
 try:
     from pages.screener_pisau_jatuh import app as pisau_jatuh_app
     from pages.screener_multi import app as multi_screener_app
     from pages.analisa import app as analisa_app
     from pages.tarik_data import app as tarik_data_app
-except ImportError:
+except ImportError as e:
+    st.warning(f"⚠️ Gagal memuat modul: {e}")
+    
+    # Fallback: fungsi dummy
     def pisau_jatuh_app(): st.write("🔧 Halaman Pisau Jatuh belum diimplementasikan.")
     def multi_screener_app(): st.write("🔧 Halaman Multi Screener belum diimplementasikan.")
     def analisa_app(): st.write("📊 Halaman Analisa belum diimplementasikan.")
     def tarik_data_app(): st.write("📥 Halaman Tarik Data belum diimplementasikan.")
 
-# Session state
+# Inisialisasi session state
 if "subpage" not in st.session_state:
     st.session_state["subpage"] = None
 
-# Halaman utama
+# =========== HALAMAN UTAMA ===========
 def main_page():
     st.title("🎯 Selamat Datang di Aplikasi Screener & Analisis")
     st.markdown("""
@@ -62,35 +65,48 @@ def main_page():
     
     Pilih menu di sidebar untuk mulai:
     
-    - **Screener**
-    - **Analisa**
-    - **Tarik Data**
+    - **Screener**: Lakukan screening data dengan berbagai metode
+    - **Analisa**: Analisis data yang sudah diambil
+    - **Tarik Data**: Ekstraksi data dari sumber eksternal
+    
+    Gunakan sub-menu jika tersedia.
     """)
 
+# =========== HALAMAN SCREENER ===========
 def screener_page():
     st.title("🔍 Screener")
+    
     col1, col2 = st.columns(2)
+    
     with col1:
         if st.button("Pisau Jatuh", use_container_width=True):
             st.session_state["subpage"] = "Pisau Jatuh"
+    
     with col2:
         if st.button("Multi Screener", use_container_width=True):
             st.session_state["subpage"] = "Multi Screener"
     
+    # Render subpage
     if st.session_state["subpage"] == "Pisau Jatuh":
+        st.subheader("⚙️ Pisau Jatuh")
         pisau_jatuh_app()
     elif st.session_state["subpage"] == "Multi Screener":
+        st.subheader("⚙️ Multi Screener")
         multi_screener_app()
 
+# =========== HALAMAN ANALISA ===========
 def analisa_page():
-    st.session_state["subpage"] = None
+    st.title("📊 Analisa")
+    st.session_state["subpage"] = None  # Reset subpage
     analisa_app()
 
+# =========== HALAMAN TARIK DATA ===========
 def tarik_data_page():
-    st.session_state["subpage"] = None
+    st.title("📥 Tarik Data")
+    st.session_state["subpage"] = None  # Reset subpage
     tarik_data_app()
 
-# Navigasi
+# =========== KONFIGURASI MENU NAVIGASI ===========
 pages = {
     "Main Page": main_page,
     "Screener": screener_page,
@@ -98,10 +114,12 @@ pages = {
     "Tarik Data": tarik_data_page,
 }
 
+# =========== SIDEBAR MENU ===========
 with st.sidebar:
     st.image("https://via.placeholder.com/150/007BFF/FFFFFF?text=AppLogo", width=120)
     st.markdown("### 📊 Audit & Screening Tools")
     st.markdown("---")
+
     selected = option_menu(
         menu_title="Navigasi",
         options=list(pages.keys()),
@@ -121,10 +139,11 @@ with st.sidebar:
         },
     )
 
+# Reset subpage jika kembali ke halaman utama
 if selected == "Main Page":
     st.session_state["subpage"] = None
 
-# Render
+# =========== RENDER HALAMAN YANG DIPILIH ===========
 try:
     pages[selected]()
 except Exception as e:
