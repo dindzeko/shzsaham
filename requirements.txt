@@ -1,2 +1,8 @@
 streamlit
 pandas
+openpyxl
+yfinance
+numpy
+scikit-learn
+scipy
+plotly
