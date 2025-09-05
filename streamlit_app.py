@@ -2,46 +2,28 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import os
 
-st.set_page_config(
-    page_title="Saham SHZ",
-    page_icon="📊",
-    layout="centered",
-    initial_sidebar_state="expanded"
-)
-
+# --- CSS ---
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-# --- CSS DIPERBAIKI UNTUK SEMBUNYIKAN "streamlit.app" ---
 css_styles = """
 <style>
-h1 { 
-    font-size: 2.5rem; 
-    color: #333; 
-    text-align: center;
-}
-p { 
-    font-size: 1.2rem; 
-    color: #555; 
-}
-.sidebar .sidebar-content { 
-    padding: 20px; 
-    background-color: #f9f9f9; 
-}
+h1 { font-size: 2.5rem; color: #333; text-align: center; }
+p { font-size: 1.2rem; color: #555; }
+.sidebar .sidebar-content { padding: 20px; background-color: #f9f9f9; }
 
-/* --- SEMBUNYIKAN HEADER SIDEBAR (streamlit.app) --- */
+/* Sembunyikan header dan navigasi otomatis */
 [data-testid="stSidebarHeader"] {
     display: none !important;
 }
-
-/* --- SEMBUNYIKAN LOGO STREAMLIT (opsional) --- */
-[data-testid="stSidebarNav"] > div:first-child {
+[data-testid="stSidebarNav"] > div {
     display: none !important;
 }
 </style>
 """
 add_css(css_styles)
 
+# --- Menu Manual ---
 pages = {
     "Home": "home",
     "Pisau Jatuh": "pisau_jatuh",
@@ -58,6 +40,7 @@ with st.sidebar:
         default_index=0,
     )
 
+# --- Load Module ---
 pages_dir = "pages"
 if not os.path.exists(pages_dir):
     st.error("Folder 'pages' tidak ditemukan.")
