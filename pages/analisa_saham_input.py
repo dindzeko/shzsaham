@@ -6,7 +6,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from scipy.signal import argrelextrema
-import io
 
 # --- FUNGSI ANALISIS TEKNIKAL ---
 def compute_rsi(close, period=14):
@@ -176,21 +175,24 @@ def app():
         df['Avg_Volume_20'] = df['Volume'].rolling(window=20).mean()
         vol_anomali = (df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]) if not df['Avg_Volume_20'].isna().iloc[-1] else False
 
-        # --- PLOT GRAFIK DENGAN MATPLOTLIB ---
+        # --- PLOT GRAFIK ---
         fig, ax = plt.subplots(figsize=(12, 6))
 
-        # Plot harga penutupan
-        ax.plot(df.index, df['Close'], label='Close Price', color='black', linewidth=1.5, zorder=5)
+        # Plot candlestick
+        colors = ['green' if c > o else 'red' for c, o in zip(df['Close'], df['Open'])]
+        ax.bar(df.index, df['Close'] - df['Open'], color=colors, edgecolor='black', linewidth=0.5, zorder=3)
+        ax.bar(df.index, df['High'] - df['Close'], color='green', edgecolor='black', linewidth=0.5, zorder=2)
+        ax.bar(df.index, df['Open'] - df['Low'], color='red', edgecolor='black', linewidth=0.5, zorder=2)
 
         # Plot MA20 & MA50
         ax.plot(df.index, df['MA20'], label='MA20', color='blue', linewidth=1, zorder=4)
-        ax.plot(df.index, df['MA50'], label='MA50', color='orange', linewidth=1, zorder=3)
+        ax.plot(df.index, df['MA50'], label='MA50', color='orange', linewidth=1, zorder=4)
 
         # Plot Support & Resistance
         for level in sr['Support']:
-            ax.axhline(y=level, color='green', linestyle='--', label=f'Support {level:.2f}', zorder=2)
+            ax.axhline(y=level, color='green', linestyle='--', label=f'Support {level:.2f}', zorder=1)
         for level in sr['Resistance']:
-            ax.axhline(y=level, color='red', linestyle='--', label=f'Resistance {level:.2f}', zorder=2)
+            ax.axhline(y=level, color='red', linestyle='--', label=f'Resistance {level:.2f}', zorder=1)
 
         # Plot Fibonacci
         fib_colors = ['purple', 'magenta', 'cyan', 'brown']
@@ -199,7 +201,7 @@ def app():
             if key in fib:
                 ax.axhline(y=fib[key], color=fib_colors[i % len(fib_colors)], linestyle=':', label=f'{key} {fib[key]:.2f}', zorder=1)
 
-        ax.set_title(f"{ticker} - Price & Indicators", fontsize=14, fontweight='bold')
+        ax.set_title(f"{ticker} - Price Analysis", fontsize=14, fontweight='bold')
         ax.set_xlabel("Date", fontsize=12)
         ax.set_ylabel("Price (Rp)", fontsize=12)
         ax.grid(True, alpha=0.3)
@@ -209,17 +211,6 @@ def app():
 
         # Tampilkan di Streamlit
         st.pyplot(fig)
-
-        # --- EXPORT GRAFIK KE PNG ---
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=300, bbox_inches='tight', facecolor='white')
-        buf.seek(0)
-        st.download_button(
-            label="📷 Unduh Grafik sebagai PNG",
-            data=buf,
-            file_name=f"{ticker.replace('.JK', '')}_analisis_{datetime.today().strftime('%Y%m%d')}.png",
-            mime="image/png"
-        )
 
         # --- TAMPILKAN INDIKATOR TEKNIKAL ---
         st.subheader("📊 Indikator Teknikal")
