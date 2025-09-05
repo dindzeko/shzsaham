@@ -3,7 +3,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from scipy.signal import argrelextrema
 import io
@@ -161,8 +161,6 @@ def app():
             st.warning(f"Data untuk {ticker} tidak tersedia.")
             return
 
-        st.subheader(f"📊 Analisis Teknikal: {ticker}")
-
         # Hitung semua indikator
         df = data.copy()
         df['MA20'] = df['Close'].rolling(20).mean()
@@ -178,66 +176,76 @@ def app():
         df['Avg_Volume_20'] = df['Volume'].rolling(window=20).mean()
         vol_anomali = (df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]) if not df['Avg_Volume_20'].isna().iloc[-1] else False
 
-        # --- PLOT GRAFIK DENGAN MATPLOTLIB ---
-        fig, ax = plt.subplots(figsize=(12, 6))
-        ax.plot(df.index, df['Close'], label='Close Price', color='black', linewidth=1.5)
-        ax.plot(df.index, df['MA20'], label='MA20', color='blue', linewidth=1)
-        ax.plot(df.index, df['MA50'], label='MA50', color='orange', linewidth=1)
+        # --- PLOT GRAFIK ---
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Candlestick'
+        ))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='orange', width=1)))
 
-        # Plot Support & Resistance
+        # Support/Resistance
         for level in sr['Support']:
-            ax.axhline(y=level, color='green', linestyle='--', label=f'Support {level:.2f}')
+            fig.add_hline(y=level, line_dash="dash", line_color="green", annotation_text=f"Support: {level:.2f}")
         for level in sr['Resistance']:
-            ax.axhline(y=level, color='red', linestyle='--', label=f'Resistance {level:.2f}')
+            fig.add_hline(y=level, line_dash="dash", line_color="red", annotation_text=f"Resistance: {level:.2f}")
 
-        # Plot Fibonacci (opsional, bisa di-skip jika terlalu ramai)
-        fib_colors = ['purple', 'magenta', 'cyan', 'brown']
-        fib_keys = ['Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618']
-        for i, key in enumerate(fib_keys):
-            if key in fib:
-                ax.axhline(y=fib[key], color=fib_colors[i % len(fib_colors)], linestyle=':', label=f'{key} {fib[key]:.2f}')
+        # Fibonacci
+        for key, value in fib.items():
+            if "Fib" in key and key != "Fib_0.0" and key != "Fib_1.0":
+                fig.add_hline(y=value, line_dash="dot", line_color="purple", annotation_text=f"{key}: {value:.2f}")
 
-        ax.set_title(f"{ticker} - Price & Indicators", fontsize=14)
-        ax.set_xlabel("Date")
-        ax.set_ylabel("Price")
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper left', fontsize=8)
-        plt.xticks(rotation=45)
-        plt.tight_layout()
+        fig.update_layout(
+            title=f"{ticker} Price Analysis",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            xaxis_rangeslider_visible=False,
+            height=600
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Tampilkan di Streamlit
-        st.pyplot(fig)
-
-        # --- EXPORT GRAFIK KE PNG ---
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=300, bbox_inches='tight')
-        buf.seek(0)
+        # --- EXPORT GRAFIK ---
+        fig_bytes = fig.to_image(format="png", width=1200, height=800, scale=2)
         st.download_button(
             label="📷 Unduh Grafik sebagai PNG",
-            data=buf,
+            data=fig_bytes,
             file_name=f"{ticker.replace('.JK', '')}_analisis_{datetime.today().strftime('%Y%m%d')}.png",
             mime="image/png"
         )
 
-        # --- TAMPILKAN SEMUA INDIKATOR ---
-        st.subheader("📌 Indikator Teknikal")
+        # --- TAMPILKAN INDIKATOR TEKNIKAL ---
+        st.subheader("Indikator Teknikal")
 
         col1, col2, col3 = st.columns(3)
-        last_row = df.iloc[-1]
 
-        col1.metric("MA20", f"{last_row['MA20']:.2f}" if not np.isnan(last_row['MA20']) else "N/A")
-        col1.metric("MA50", f"{last_row['MA50']:.2f}" if not np.isnan(last_row['MA50']) else "N/A")
-        col2.metric("RSI", f"{last_row['RSI']:.2f}" if not np.isnan(last_row['RSI']) else "N/A")
-        col2.metric("MFI", f"{mfi_value:.2f}" if not np.isnan(mfi_value) else "N/A", mfi_signal)
-        col3.metric("Volume", f"{int(last_row['Volume']):,}" if not np.isnan(last_row['Volume']) else "N/A")
-        col3.metric("Volume Anomali", "🚨 Ya" if vol_anomali else "Tidak")
+        with col1:
+            st.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}" if not np.isnan(df['MA20'].iloc[-1]) else "N/A")
+            st.metric("MA50", f"{df['MA50'].iloc[-1]:.2f}" if not np.isnan(df['MA50'].iloc[-1]) else "N/A")
 
-        st.subheader("📍 Level Support & Resistance")
-        st.write(f"**Support:** {' | '.join([f'{s:.2f}' for s in sr['Support']])}")
-        st.write(f"**Resistance:** {' | '.join([f'{r:.2f}' for r in sr['Resistance']])}")
+        with col2:
+            st.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}" if not np.isnan(df['RSI'].iloc[-1]) else "N/A")
+            st.metric("MFI", f"{mfi_value:.2f}" if not np.isnan(mfi_value) else "N/A", mfi_signal)
 
-        st.subheader("🔢 Level Fibonacci")
-        fib_display = {k: v for k, v in fib.items() if "Fib" in k and k != "Fib_0.0" and k != "Fib_1.0"}
-        fib_df = pd.DataFrame(list(fib_display.items()), columns=["Level", "Harga"])
-        fib_df["Level"] = fib_df["Level"].str.replace("Fib_", "Fib ")
-        st.dataframe(fib_df.style.format({"Harga": "{:.2f}"}), use_container_width=True)
+        with col3:
+            st.metric("Volume", f"{int(df['Volume'].iloc[-1]):,}" if not np.isnan(df['Volume'].iloc[-1]) else "N/A")
+            st.metric("Volume Anomali", "🚨 Ya" if vol_anomali else "Tidak")
+
+        # --- LEVEL PENTING ---
+        st.subheader("Level Penting")
+        if sr['Support']:
+            st.write(f"**Support:** {' | '.join([f'{s:.2f}' for s in sr['Support']])}")
+        if sr['Resistance']:
+            st.write(f"**Resistance:** {' | '.join([f'{r:.2f}' for r in sr['Resistance']])}")
+
+        # --- LEVEL FIBONACCI ---
+        st.subheader("Level Fibonacci")
+        fib_cols = st.columns(4)
+        fib_keys = ['Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618']
+        for i, key in enumerate(fib_keys):
+            if key in fib:
+                fib_cols[i].metric(key.replace('Fib_', ''), f"{fib[key]:.2f}")
