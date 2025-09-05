@@ -149,7 +149,7 @@ def get_stock_data(ticker, end_date):
 
 # --- FUNGSI UTAMA ---
 def app():
-    st.title("📈 Analisis Teknikal Saham")
+    st.title("📈 Analisis Teknikal")
 
     ticker_input = st.text_input("Masukkan Kode Saham (contoh: BBCA.JK)", value="BBCA.JK")
     analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
