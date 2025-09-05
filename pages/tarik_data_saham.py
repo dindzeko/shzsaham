@@ -8,7 +8,7 @@ import time
 
 # Konfigurasi halaman — HARUS DI LUAR app() untuk menghindari error
 st.set_page_config(
-    page_title="Halaman Tarik Data Saham",
+    page_title="Tarik Data Saham",
     page_icon="📊",
     layout="centered"
 )
