@@ -6,3 +6,5 @@ numpy
 matplotlib
 scipy
 openpyxl
+scikit-learn
+plotly
