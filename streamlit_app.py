@@ -4,7 +4,7 @@ from streamlit_option_menu import option_menu
 import os
 
 st.set_page_config(
-    page_title="AuditApp",
+    page_title="Saham SHZ",
     page_icon="📊",
     layout="centered",
     initial_sidebar_state="expanded"
@@ -31,7 +31,7 @@ pages = {
 
 with st.sidebar:
     selected = option_menu(
-        menu_title="AuditApp",
+        menu_title="Saham SHZ",
         options=list(pages.keys()),
         icons=["house", "knife", "chart-line", "download"],
         menu_icon="cast",
