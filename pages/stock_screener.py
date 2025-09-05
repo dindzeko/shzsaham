@@ -10,7 +10,6 @@ def app():
     tickers = df['Ticker'].dropna().tolist()
     analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
     
-    # Tombol screening
     if st.button("🔍 Mulai Screening"):
         results = []
         progress_bar = st.progress(0)
@@ -32,7 +31,6 @@ def app():
                         "MFI": metrics["MFI"],
                         "MFI Signal": metrics["MFI_Signal"],
                         "Vol Anomali": "🚨 Ya" if metrics["Volume_Anomali"] else "-",
-                        "Volume": metrics["Volume"],
                         "Support": " | ".join([f"{s:.2f}" for s in metrics["Support"]]),
                         "Resistance": " | ".join([f"{r:.2f}" for r in metrics["Resistance"]]),
                         "Fib 0.382": fib['Fib_0.382'],
@@ -48,12 +46,10 @@ def app():
         else:
             st.warning("Tidak ada saham yang cocok dengan pola.")
     
-    # Tampilkan hasil screening jika ada
     if st.session_state.screening_results is not None:
         st.subheader("✅ Saham yang Memenuhi Kriteria")
         st.dataframe(st.session_state.screening_results)
         
-        # Dropdown untuk memilih saham
         ticker_list = st.session_state.screening_results['Ticker'].tolist()
         selected_ticker = st.selectbox(
             "Pilih Saham untuk Detail",
@@ -62,16 +58,13 @@ def app():
             key='ticker_selector'
         )
         
-        # Simpan ticker yang dipilih di session state
         st.session_state.selected_ticker = selected_ticker
         
-        # Tombol untuk menampilkan detail
         if st.button("Tampilkan Analisis Detail"):
             if st.session_state.selected_ticker:
                 show_stock_details(st.session_state.selected_ticker, analysis_date)
 
 def show_stock_details(ticker, end_date):
-    """Menampilkan detail analisis teknis untuk saham terpilih"""
     data = get_stock_data(ticker, end_date)
     if data is None or data.empty:
         st.warning(f"Data untuk {ticker} tidak tersedia")
@@ -79,10 +72,8 @@ def show_stock_details(ticker, end_date):
         
     st.subheader(f"Analisis Teknis: {ticker}")
     
-    # Buat chart
     fig = go.Figure()
     
-    # Tambahkan candlestick
     fig.add_trace(go.Candlestick(
         x=data.index,
         open=data['Open'],
@@ -92,7 +83,6 @@ def show_stock_details(ticker, end_date):
         name='Candlestick'
     ))
     
-    # Tambahkan MA
     data['MA20'] = data['Close'].rolling(20).mean()
     data['MA50'] = data['Close'].rolling(50).mean()
     fig.add_trace(go.Scatter(
@@ -109,11 +99,9 @@ def show_stock_details(ticker, end_date):
     ))
     
     try:
-        # Support/Resistance dan Fibonacci
         sr = calculate_support_resistance(data.tail(60))
         fib = sr['Fibonacci']
         
-        # Tambahkan level Support/Resistance
         for level in sr['Support']:
             fig.add_hline(
                 y=level, 
@@ -131,7 +119,6 @@ def show_stock_details(ticker, end_date):
                 annotation_position="top right"
             )
         
-        # Tambahkan level Fibonacci
         for key, value in fib.items():
             if "Fib" in key:
                 fig.add_hline(
@@ -144,7 +131,6 @@ def show_stock_details(ticker, end_date):
     except Exception as e:
         st.warning(f"Gagal menghitung support/resistance: {e}")
     
-    # Layout chart
     fig.update_layout(
         title=f"{ticker} Price Analysis",
         xaxis_title="Date",
@@ -154,8 +140,6 @@ def show_stock_details(ticker, end_date):
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Tampilkan indikator tambahan
-    st.subheader("Indikator Teknikal")
     try:
         metrics = calculate_additional_metrics(data)
         fib = metrics.get("Fibonacci", {})
@@ -166,7 +150,7 @@ def show_stock_details(ticker, end_date):
         col2.metric("RSI", f"{metrics.get('RSI', 0):.2f}")
         col2.metric("MFI", f"{metrics.get('MFI', 0):.2f}", metrics.get('MFI_Signal', 'N/A'))
         col3.metric("Volume", f"{metrics.get('Volume', 0):,}")
-        col3.metric("Volume Anomali", "Ya" if metrics.get('Volume_Anomali', False) else "Tidak")
+        col3.metric("Volume Anomali", "🚨 Ya" if metrics.get('Volume_Anomali', False) else "-")
         
         st.subheader("Level Penting")
         st.write(f"**Support:** {' | '.join([f'{s:.2f}' for s in metrics.get('Support', [])])}")
