@@ -710,17 +710,20 @@ def app():
                         st.markdown(f"{i+1}. Rp {r:,.2f}")
                 else:
                     st.markdown("Tidak ada level resistance yang teridentifikasi")
-
             # --- LEVEL FIBONACCI ---
+            st.markdown('<div style="font-size: 0.85em;">', unsafe_allow_html=True)
             st.subheader("🔢 Level Fibonacci")
             fib_display = {k: v for k, v in fib.items() if k in fib_keys}
             if fib_display:
                 cols = st.columns(len(fib_display))
                 for i, (key, value) in enumerate(fib_display.items()):
-                    cols[i].metric(key.replace('Fib_', 'Fib '), f"Rp {value:,.2f}")
-            else:
-                st.warning("Tidak dapat menghitung level Fibonacci. Data tidak cukup.")
-
+                    cols[i].metric(
+                        key.replace('Fib_', 'Fib ').replace('_', ' '), 
+                        f"{value:,.2f}",
+                        help=f"Level {key.replace('Fib_', '')}"
+                   )
+            st.markdown('</div>', unsafe_allow_html=True)
+       
             # --- ANALISIS BOLLINGER BANDS ---
             st.subheader("📊 Analisis Bollinger Bands")
             
