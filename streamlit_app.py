@@ -44,7 +44,7 @@ pages = {
 # Sidebar navigation
 with st.sidebar:
     selected = option_menu(
-        menu_title="AuditApp",
+        menu_title="Saham SHZ",
         options=list(pages.keys()),
         icons=[
             "house", "knife", "chart-line", "download"
