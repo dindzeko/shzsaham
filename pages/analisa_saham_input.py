@@ -69,6 +69,21 @@ def interpret_macd(macd_line, signal_line, hist):
     else:
         return "⚪ Netral (tidak ada sinyal kuat)"
 
+def compute_bollinger_bands(close, window=20, num_std=2):
+    sma = close.rolling(window=window).mean()
+    std = close.rolling(window=window).std()
+    upper_band = sma + (std * num_std)
+    lower_band = sma - (std * num_std)
+    return upper_band, sma, lower_band
+
+def interpret_bollinger_bands(price, upper_band, lower_band):
+    if price > upper_band:
+        return "🔴 Overbought (Harga mendekati/melampaui upper band)"
+    elif price < lower_band:
+        return "🟢 Oversold (Harga mendekati/melampaui lower band)"
+    else:
+        return "⚪ Normal (Harga dalam range Bollinger Bands)"
+
 def identify_significant_swings(df, window=60, min_swing_size=0.05):
     highs = df['High']
     lows = df['Low']
@@ -162,6 +177,58 @@ def get_stock_data(ticker, end_date):
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
 
+def generate_conclusion(rsi_value, mfi_value, macd_signal, bb_signal, vol_anomali, price_change):
+    conclusions = []
+    
+    # RSI Analysis
+    if rsi_value > 70:
+        conclusions.append("RSI menunjukkan kondisi overbought, kemungkinan koreksi harga.")
+    elif rsi_value < 30:
+        conclusions.append("RSI menunjukkan kondisi oversold, potensi rebound.")
+    else:
+        conclusions.append("RSI dalam range normal.")
+    
+    # MFI Analysis
+    if mfi_value >= 80:
+        conclusions.append("MFI menunjukkan tekanan jual yang kuat (overbought).")
+    elif mfi_value <= 20:
+        conclusions.append("MFI menunjukkan tekanan beli yang kuat (oversold).")
+    
+    # MACD Analysis
+    if "Bullish" in macd_signal:
+        conclusions.append("MACD memberikan sinyal bullish untuk jangka pendek.")
+    elif "Bearish" in macd_signal:
+        conclusions.append("MACD memberikan sinyal bearish untuk jangka pendek.")
+    
+    # Bollinger Bands Analysis
+    if "Overbought" in bb_signal:
+        conclusions.append("Harga mendekati/melampaui upper Bollinger Band, menunjukkan kondisi jenuh beli.")
+    elif "Oversold" in bb_signal:
+        conclusions.append("Harga mendekati/melampaui lower Bollinger Band, menunjukkan kondisi jenuh jual.")
+    
+    # Volume Analysis
+    if vol_anomali:
+        conclusions.append("Terdapat anomali volume yang signifikan, mengindikasikan minat yang tinggi.")
+    
+    # Price Change Analysis
+    if price_change > 2:
+        conclusions.append("Kenaikan harga signifikan menunjukkan momentum bullish yang kuat.")
+    elif price_change < -2:
+        conclusions.append("Penurunan harga signifikan menunjukkan tekanan jual yang berat.")
+    
+    # Final Recommendation
+    bullish_signals = sum([1 for c in conclusions if "bullish" in c.lower() or "rebound" in c.lower() or "oversold" in c.lower()])
+    bearish_signals = sum([1 for c in conclusions if "bearish" in c.lower() or "overbought" in c.lower() or "jual" in c.lower()])
+    
+    if bullish_signals > bearish_signals + 2:
+        conclusions.append("**Rekomendasi: Bias Bullish - Pertimbangkan untuk akumulasi atau hold**")
+    elif bearish_signals > bullish_signals + 2:
+        conclusions.append("**Rekomendasi: Bias Bearish - Pertimbangkan untuk take profit atau wait and see**")
+    else:
+        conclusions.append("**Rekomendasi: Netral - Tunggu konfirmasi lebih lanjut**")
+    
+    return conclusions
+
 # --- FUNGSI UTAMA ---
 def app():
     st.title("📈 Analisa Teknikal Saham")
@@ -188,6 +255,11 @@ def app():
         df['RSI'] = compute_rsi(df['Close'])
         df['MFI'] = compute_mfi(df, 14)
         df['MACD'], df['Signal'], df['Hist'] = compute_macd(df['Close'])
+        
+        # Bollinger Bands
+        df['BB_Upper'], df['BB_Middle'], df['BB_Lower'] = compute_bollinger_bands(df['Close'])
+        bb_signal = interpret_bollinger_bands(df['Close'].iloc[-1], df['BB_Upper'].iloc[-1], df['BB_Lower'].iloc[-1])
+        
         sr = calculate_support_resistance(df)
         fib = sr['Fibonacci']
         mfi_value = df['MFI'].iloc[-1] if not df['MFI'].empty else np.nan
@@ -197,6 +269,10 @@ def app():
         # Volume Anomali
         df['Avg_Volume_20'] = df['Volume'].rolling(window=20).mean()
         vol_anomali = (df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]) if not df['Avg_Volume_20'].isna().iloc[-1] else False
+        
+        # Harga sebelumnya
+        previous_close = df['Close'].iloc[-2] if len(df) > 1 else df['Close'].iloc[-1]
+        price_change = ((df['Close'].iloc[-1] - previous_close) / previous_close) * 100
 
         # --- PLOT GRAFIK (PLOTLY) ---
         fig = go.Figure()
@@ -216,6 +292,12 @@ def app():
         # MA20 & MA50
         fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], mode='lines', name='MA20', line=dict(color='blue', width=1)))
         fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], mode='lines', name='MA50', line=dict(color='orange', width=1)))
+        
+        # Bollinger Bands
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], mode='lines', name='BB Upper', line=dict(color='gray', width=1, dash='dash')))
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Middle'], mode='lines', name='BB Middle', line=dict(color='purple', width=1)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], mode='lines', name='BB Lower', line=dict(color='gray', width=1, dash='dash'),
+                                fill='tonexty', fillcolor='rgba(128,128,128,0.1)'))
 
         # Support & Resistance
         for level in sr['Support']:
@@ -250,23 +332,28 @@ def app():
 
         # --- INDIKATOR TEKNIKAL ---
         st.subheader("📊 Indikator Teknikal")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
         with col1:
+            st.metric("Harga Sebelumnya", f"{previous_close:.2f}")
+            st.metric("Perubahan", f"{price_change:.2f}%", 
+                     delta_color="normal" if price_change == 0 else "inverse" if price_change < 0 else "normal")
+
+        with col2:
             st.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}" if not np.isnan(df['MA20'].iloc[-1]) else "N/A")
             st.metric("MA50", f"{df['MA50'].iloc[-1]:.2f}" if not np.isnan(df['MA50'].iloc[-1]) else "N/A")
 
-        with col2:
+        with col3:
             st.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}" if not np.isnan(df['RSI'].iloc[-1]) else "N/A")
             st.metric("MFI", f"{mfi_value:.2f}" if not np.isnan(mfi_value) else "N/A", mfi_signal)
 
-        with col3:
+        with col4:
             st.metric("MACD", f"{df['MACD'].iloc[-1]:.2f}")
             st.metric("Signal", f"{df['Signal'].iloc[-1]:.2f}")
 
-        with col4:
-            st.metric("Histogram", f"{df['Hist'].iloc[-1]:.2f}")
-            st.metric("Kesimpulan", macd_signal)
+        with col5:
+            st.metric("Bollinger Bands", bb_signal)
+            st.metric("Volume Anomali", "Ya" if vol_anomali else "Tidak")
 
         # --- LEVEL PENTING ---
         st.subheader("📍 Level Penting")
@@ -282,3 +369,17 @@ def app():
             cols = st.columns(len(fib_display))
             for i, (key, value) in enumerate(fib_display.items()):
                 cols[i].metric(key.replace('Fib_', 'Fib '), f"{value:.2f}")
+
+        # --- KESIMPULAN LENGKAP ---
+        st.subheader("📋 Kesimpulan Analisis Teknikal")
+        conclusions = generate_conclusion(
+            df['RSI'].iloc[-1], 
+            mfi_value, 
+            macd_signal, 
+            bb_signal, 
+            vol_anomali,
+            price_change
+        )
+        
+        for conclusion in conclusions:
+            st.write(f"- {conclusion}")
