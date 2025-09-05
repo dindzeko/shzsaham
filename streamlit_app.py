@@ -1,4 +1,3 @@
-# streamlit_app.py
 import streamlit as st
 from streamlit_option_menu import option_menu
 import os
@@ -13,11 +12,32 @@ st.set_page_config(
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
+# --- CSS DIPERBAIKI UNTUK SEMBUNYIKAN "streamlit.app" ---
 css_styles = """
 <style>
-h1 { font-size: 2.5rem; color: #333; }
-p { font-size: 1.2rem; color: #555; }
-.sidebar .sidebar-content { padding: 20px; background-color: #f9f9f9; }
+h1 { 
+    font-size: 2.5rem; 
+    color: #333; 
+    text-align: center;
+}
+p { 
+    font-size: 1.2rem; 
+    color: #555; 
+}
+.sidebar .sidebar-content { 
+    padding: 20px; 
+    background-color: #f9f9f9; 
+}
+
+/* --- SEMBUNYIKAN HEADER SIDEBAR (streamlit.app) --- */
+[data-testid="stSidebarHeader"] {
+    display: none !important;
+}
+
+/* --- SEMBUNYIKAN LOGO STREAMLIT (opsional) --- */
+[data-testid="stSidebarNav"] > div:first-child {
+    display: none !important;
+}
 </style>
 """
 add_css(css_styles)
