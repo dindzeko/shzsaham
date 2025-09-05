@@ -77,7 +77,7 @@ def pisau_jatuh():
     except Exception as e:
         st.error(f"Error: {str(e)}")
 
-def analisa_saham_input():
+def analisa_saham():
     st.title("Analisa Saham")
     try:
         analisa_saham_input_app()
@@ -95,7 +95,7 @@ def tarik_data_saham():
 pages_config = {
     "Main pages": main_pages,
     "Pisau Jatuh": pisau_jatuh,
-    "Analisa Saham": analisa_saham_individu,
+    "Analisa Saham": analisa_saham,
     "Tarik Data Saham": tarik_data_saham,
 }
 
