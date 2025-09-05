@@ -64,7 +64,7 @@ def main_pages():
     st.write("""
     Aplikasi ini berisi fitur:
     - **Pisau Jatuh**: Screener otomatis dari daftar ticker di Google Sheet — deteksi pola candlestick "Pisau Jatuh".
-    - **Analisa Saham Input**: Input ticker → tampilkan analisis teknikal lengkap (MA, Fibonacci, RSI, MFI, grafik interaktif) + export PNG/PDF.
+    - **Analisa Saham**: Input ticker → tampilkan analisis teknikal lengkap (MA, Fibonacci, RSI, MFI, grafik interaktif) + export PNG/PDF.
     - **Tarik Data Saham**: Input satu atau banyak ticker → unduh data historis ke Excel (multi-sheet).
     
     Pilih menu di sidebar untuk mulai!
@@ -78,7 +78,7 @@ def pisau_jatuh():
         st.error(f"Error: {str(e)}")
 
 def analisa_saham_input():
-    st.title("Analisa Saham Input")
+    st.title("Analisa Saham")
     try:
         analisa_saham_input_app()
     except Exception as e:
@@ -95,7 +95,7 @@ def tarik_data_saham():
 pages_config = {
     "Main pages": main_pages,
     "Pisau Jatuh": pisau_jatuh,
-    "Analisa Saham Input": analisa_saham_input,
+    "Analisa Saham": analisa_saham_individu,
     "Tarik Data Saham": tarik_data_saham,
 }
 
