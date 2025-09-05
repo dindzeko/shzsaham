@@ -1,9 +1,7 @@
 streamlit
-pandas
-openpyxl
 yfinance
+pandas
 numpy
-scikit-learn
-scipy
 plotly
-streamlit-option-menu
+scipy
+openpyxl
