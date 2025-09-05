@@ -1,182 +1,52 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
-import os
+import pandas as pd
+import datetime
 
-# ====================
-# SET PAGE CONFIG (TRIK: page_title kosong agar tidak muncul "streamlit app")
-# ====================
-st.set_page_config(
-    page_title="",  # <-- TRIK UTAMA: kosongkan agar tidak muncul "streamlit app"
-    page_icon="📊",
-    layout="centered",
-    initial_sidebar_state="expanded"
-)
-
-# ====================
-# Fungsi CSS Styling
-# ====================
+# Fungsi untuk menambahkan CSS
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
-# ====================
-# FULL CSS STYLING (BERSIH & MODERN)
-# ====================
-modern_css = """
+# CSS styling (opsional)
+css_styles = """
 <style>
-/* --- HILANGKAN HEADER SIDEBAR DAN NAVIGASI OTOMATIS STREAMLIT --- */
-[data-testid="stSidebarHeader"],
-[data-testid="stSidebarNav"] > div {
-    display: none !important;
-}
-
-/* --- Sidebar Styling --- */
-.sidebar .sidebar-content {
-    background-color: #f8f9fa !important;
-    padding: 25px !important;
-    border-radius: 12px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    margin-top: 20px;
-}
-
-/* --- Menu Option Styling --- */
-.sidebar .sidebar-content ul li a {
-    display: flex;
-    align-items: center;
-    padding: 14px 20px;
-    text-decoration: none;
-    color: #2c3e50;
-    font-size: 1.05rem;
-    border-radius: 8px;
-    margin-bottom: 8px;
-    transition: all 0.3s ease;
-    font-weight: 500;
-}
-
-.sidebar .sidebar-content ul li a:hover,
-.sidebar .sidebar-content ul li a.active {
-    background-color: #2980b9;
-    color: white;
-    transform: translateX(4px);
-}
-
-.sidebar .sidebar-content ul li a i {
-    margin-right: 12px;
-    font-size: 1.2rem;
-    width: 24px;
-    text-align: center;
-}
-
-/* --- Header Utama --- */
-header {
-    background-color: #fff;
-    padding: 1.2rem 2rem;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-header h1 {
-    font-size: 2.4rem;
-    color: #2c3e50;
-    font-weight: 600;
-    letter-spacing: -0.5px;
-}
-
-/* --- Content Styling --- */
-.main .block-container {
-    padding-top: 2rem !important;
-    padding-left: 3rem !important;
-    padding-right: 3rem !important;
-}
-
+/* Styling untuk judul utama */
 h1 {
-    font-size: 2.8rem;
-    color: #2c3e50;
-    text-align: center;
-    margin-bottom: 1.5rem;
-    font-weight: 700;
-    letter-spacing: -1px;
+    font-size: 2.5rem;
+    color: #333;
 }
 
-h2 {
-    font-size: 2.1rem;
-    color: #2980b9;
-    margin-top: 2rem;
-    margin-bottom: 1rem;
-    font-weight: 600;
-}
-
+/* Styling untuk deskripsi */
 p {
-    font-size: 1.1rem;
-    line-height: 1.7;
+    font-size: 1.2rem;
     color: #555;
-    margin-bottom: 1.2rem;
-    text-align: justify;
 }
 
-/* --- Footer --- */
-footer {
-    text-align: center;
-    padding: 30px;
-    color: #7f8c8d;
-    font-size: 0.95rem;
-    margin-top: 3rem;
-    border-top: 1px solid #eee;
-}
-
-/* --- Responsive --- */
-@media (max-width: 768px) {
-    .main .block-container {
-        padding-left: 1rem !important;
-        padding-right: 1rem !important;
-    }
-    h1 {
-        font-size: 2.2rem;
-    }
+/* Styling untuk sidebar */
+.sidebar .sidebar-content {
+    padding: 20px;
+    background-color: #f9f9f9;
 }
 </style>
 """
-add_css(modern_css)
+add_css(css_styles)
 
-# ====================
-# IMPOR MODUL HALAMAN
-# ====================
+# Impor modul-modul halaman dari folder `page/`
 try:
-    from pages.home import app as home_app
-    from pages.pisau_jatuh import app as pisau_jatuh_app
-    from pages.analisa_saham_input import app as analisa_saham_input_app
-    from pages.tarik_data_saham import app as tarik_data_saham_app
+    from page.home import app as home_app
+    from page.pisau_jatuh import app as pisau_jatuh_app
+    from page.analisa_saham_input import app as analisa_saham_input_app
+    from page.tarik_data_saham import app as tarik_data_saham_app
 except ImportError as e:
     st.error(f"Error importing modules: {str(e)}")
     st.stop()
 
-# ====================
-# SESSION STATE
-# ====================
-if "selected_page" not in st.session_state:
-    st.session_state["selected_page"] = "Home"
+# Inisialisasi session state
+if "subpage" not in st.session_state:
+    st.session_state["subpage"] = None
 
-# ====================
-# SIDEBAR NAVIGASI
-# ====================
-with st.sidebar:
-    selected = option_menu(
-        menu_title="Saham SHZ",
-        options=["Home", "Pisau Jatuh", "Analisa Saham Input", "Tarik Data Saham"],
-        icons=["house", "knife", "chart-line", "download"],
-        menu_icon="cast",
-        default_index=0,
-    )
-    st.session_state["selected_page"] = selected
-
-# ====================
-# RENDER HALAMAN
-# ====================
-if st.session_state["selected_page"] == "Home":
+# ----------- HALAMAN UTAMA -----------
+def main_page():
     st.title("Selamat Datang di Aplikasi Saham SHZ")
     st.write("""
     Aplikasi ini merupakan berisi fitur:
@@ -186,27 +56,60 @@ if st.session_state["selected_page"] == "Home":
     
     Pilih menu di sidebar untuk mulai!
     """)
-elif st.session_state["selected_page"] == "Pisau Jatuh":
+
+# ----------- HALAMAN PISAU JATUH -----------
+def pisau_jatuh():
+    st.title("Pisau Jatuh")
     try:
         pisau_jatuh_app()
     except Exception as e:
         st.error(f"Error: {str(e)}")
-elif st.session_state["selected_page"] == "Analisa Saham Input":
+
+# ----------- HALAMAN ANALISA SAHAM INPUT -----------
+def analisa_saham_input():
+    st.title("Analisa Saham Input")
     try:
         analisa_saham_input_app()
     except Exception as e:
         st.error(f"Error: {str(e)}")
-elif st.session_state["selected_page"] == "Tarik Data Saham":
+
+# ----------- HALAMAN TARIK DATA SAHAM -----------
+def tarik_data_saham():
+    st.title("Tarik Data Saham")
     try:
         tarik_data_saham_app()
     except Exception as e:
         st.error(f"Error: {str(e)}")
 
-# ====================
-# FOOTER
-# ====================
-st.markdown("""
-<footer>
-    © 2025 Saham SHZ — Dibuat untuk analisis saham profesional.
-</footer>
-""", unsafe_allow_html=True)
+# ----------- KONFIGURASI NAVIGASI -----------
+page_config = {
+    "Main Page": main_page,
+    "Pisau Jatuh": pisau_jatuh,
+    "Analisa Saham Input": analisa_saham_input,
+    "Tarik Data Saham": tarik_data_saham,
+}
+
+# ----------- SIDEBAR -----------
+with st.sidebar:
+    selected = option_menu(
+        menu_title="Saham SHZ",
+        options=list(page_config.keys()),
+        icons=["house", "knife", "chart-line", "download"],
+        menu_icon="cast",
+        default_index=0,
+    )
+
+# Reset session state jika kembali ke halaman utama
+if selected == "Main Page":
+    st.session_state["subpage"] = None
+
+# ----------- RENDER HALAMAN -----------
+try:
+    if selected in page_config:
+        page_config[selected]()
+    else:
+        st.error("Halaman tidak ditemukan. Silakan pilih halaman lain dari menu navigasi.")
+except KeyError as e:
+    st.error(f"Kesalahan: Halaman '{selected}' tidak ditemukan.")
+except Exception as e:
+    st.error(f"Terjadi kesalahan: {str(e)}")
