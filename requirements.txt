@@ -1,9 +1,8 @@
 streamlit
-streamlit_option_menu
+streamlit-option-menu
 yfinance
 pandas
 numpy
-plotly
+matplotlib
 scipy
 openpyxl
-kaleido
