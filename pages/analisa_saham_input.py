@@ -7,7 +7,8 @@ import numpy as np
 import plotly.graph_objects as go
 from scipy.signal import argrelextrema
 
-# --- FUNGSI ANALISIS TEKNIKAL ---
+# ==================== INDIKATOR TEKNIKAL ====================
+
 def compute_rsi(close, period=14):
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0)
@@ -53,6 +54,35 @@ def interpret_mfi(mfi_value):
     else:
         return "⚪ Neutral"
 
+def compute_macd(close, fast=12, slow=26, signal=9):
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return macd_line, signal_line, histogram
+
+def compute_ichimoku(df):
+    high_9 = df['High'].rolling(window=9).max()
+    low_9 = df['Low'].rolling(window=9).min()
+    tenkan = (high_9 + low_9) / 2
+
+    high_26 = df['High'].rolling(window=26).max()
+    low_26 = df['Low'].rolling(window=26).min()
+    kijun = (high_26 + low_26) / 2
+
+    senkou_span_a = ((tenkan + kijun) / 2).shift(26)
+
+    high_52 = df['High'].rolling(window=52).max()
+    low_52 = df['Low'].rolling(window=52).min()
+    senkou_span_b = ((high_52 + low_52) / 2).shift(26)
+
+    chikou = df['Close'].shift(-26)
+
+    return tenkan, kijun, senkou_span_a, senkou_span_b, chikou
+
+# ==================== LEVEL HARGA ====================
+
 def identify_significant_swings(df, window=60, min_swing_size=0.05):
     highs = df['High']
     lows = df['Low']
@@ -62,18 +92,8 @@ def identify_significant_swings(df, window=60, min_swing_size=0.05):
     recent_lows = lows.iloc[min_idx][-10:] if len(min_idx) > 0 else pd.Series()
     if len(recent_highs) == 0 or len(recent_lows) == 0:
         return df['High'].max(), df['Low'].min()
-    significant_highs = []
-    significant_lows = []
-    for i in range(1, len(recent_highs)):
-        change = (recent_highs.iloc[i] - recent_highs.iloc[i-1]) / recent_highs.iloc[i-1]
-        if abs(change) > min_swing_size:
-            significant_highs.append(recent_highs.iloc[i])
-    for i in range(1, len(recent_lows)):
-        change = (recent_lows.iloc[i] - recent_lows.iloc[i-1]) / recent_lows.iloc[i-1]
-        if abs(change) > min_swing_size:
-            significant_lows.append(recent_lows.iloc[i])
-    swing_high = max(significant_highs) if significant_highs else recent_highs.max()
-    swing_low = min(significant_lows) if significant_lows else recent_lows.min()
+    swing_high = recent_highs.max()
+    swing_low = recent_lows.min()
     return swing_high, swing_low
 
 def calculate_fibonacci_levels(swing_high, swing_low):
@@ -107,189 +127,121 @@ def calculate_support_resistance(data):
     ma50 = df['Close'].rolling(50).mean().iloc[-1]
     vwap = calculate_vwap(df).iloc[-1]
     psych_level = find_psychological_levels(current_price)
-    support_levels = [
-        fib_levels['Fib_0.618'], 
-        fib_levels['Fib_0.786'],
-        ma20,
-        vwap,
-        psych_level
-    ]
-    resistance_levels = [
-        fib_levels['Fib_0.236'], 
-        fib_levels['Fib_0.382'],
-        ma50,
-        vwap,
-        psych_level
-    ]
-    # Tambahkan Fib_0.0 sebagai resistance & Fib_1.0 sebagai support
-    if not np.isnan(fib_levels['Fib_0.0']) and fib_levels['Fib_0.0'] > current_price:
+
+    support_levels = [fib_levels['Fib_0.618'], fib_levels['Fib_0.786'], ma20, vwap, psych_level]
+    resistance_levels = [fib_levels['Fib_0.236'], fib_levels['Fib_0.382'], ma50, vwap, psych_level]
+
+    if fib_levels['Fib_0.0'] > current_price:
         resistance_levels.append(fib_levels['Fib_0.0'])
-    if not np.isnan(fib_levels['Fib_1.0']) and fib_levels['Fib_1.0'] < current_price:
+    if fib_levels['Fib_1.0'] < current_price:
         support_levels.append(fib_levels['Fib_1.0'])
 
-    valid_support = [lvl for lvl in support_levels if not np.isnan(lvl) and lvl < current_price]
-    valid_resistance = [lvl for lvl in resistance_levels if not np.isnan(lvl) and lvl > current_price]
+    valid_support = [lvl for lvl in support_levels if lvl < current_price]
+    valid_resistance = [lvl for lvl in resistance_levels if lvl > current_price]
     valid_support.sort(reverse=True)
     valid_resistance.sort()
-    return {
-        'Support': valid_support[:3] if valid_support else [],
-        'Resistance': valid_resistance[:3] if valid_resistance else [],
-        'Fibonacci': fib_levels
-    }
+    return {'Support': valid_support[:3], 'Resistance': valid_resistance[:3], 'Fibonacci': fib_levels}
+
+# ==================== DATA ====================
 
 def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
-        start_date = end_date - timedelta(days=90)
+        start_date = end_date - timedelta(days=180)
         data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
         return data if not data.empty else None
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
 
-# --- FUNGSI UTAMA ---
+# ==================== APLIKASI ====================
+
 def app():
     st.title("📈 Analisa Teknikal Saham")
 
-    ticker_input = st.text_input("Masukkan Kode Saham (contoh: BBCA.JK)", value="BBCA.JK")
+    ticker_input = st.text_input("Masukkan Kode Saham (contoh: BBCA)", value="BBCA")
     analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
 
     if st.button("Mulai Analisis"):
-        if not ticker_input.strip():
-            st.warning("Silakan masukkan kode saham.")
-            return
-
-        ticker = ticker_input.replace(".JK", "") + ".JK"
-        data = get_stock_data(ticker.replace(".JK", ""), analysis_date)
+        ticker = ticker_input.strip().upper()
+        data = get_stock_data(ticker, analysis_date)
 
         if data is None or data.empty:
             st.warning(f"Data untuk {ticker} tidak tersedia.")
             return
 
-        # Hitung semua indikator
         df = data.copy()
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA50'] = df['Close'].rolling(50).mean()
         df['RSI'] = compute_rsi(df['Close'])
         df['MFI'] = compute_mfi(df, 14)
+        macd_line, signal_line, hist = compute_macd(df['Close'])
+        df['MACD'], df['Signal'], df['Hist'] = macd_line, signal_line, hist
+        tenkan, kijun, senkou_a, senkou_b, chikou = compute_ichimoku(df)
+        df['Tenkan'], df['Kijun'], df['SenkouA'], df['SenkouB'], df['Chikou'] = tenkan, kijun, senkou_a, senkou_b, chikou
+
         sr = calculate_support_resistance(df)
         fib = sr['Fibonacci']
-        mfi_value = df['MFI'].iloc[-1] if not df['MFI'].empty else np.nan
-        mfi_signal = interpret_mfi(mfi_value) if not np.isnan(mfi_value) else "N/A"
+        mfi_value = df['MFI'].iloc[-1]
+        mfi_signal = interpret_mfi(mfi_value)
 
         # Volume Anomali
-        df['Avg_Volume_20'] = df['Volume'].rolling(window=20).mean()
-        vol_anomali = (df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]) if not df['Avg_Volume_20'].isna().iloc[-1] else False
+        df['Avg_Volume_20'] = df['Volume'].rolling(20).mean()
+        vol_anomali = df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]
 
-        # --- PLOT GRAFIK (PLOTLY) ---
+        # Plot Chart
         fig = go.Figure()
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
+                                     low=df['Low'], close=df['Close'],
+                                     name='Candlestick',
+                                     increasing_line_color='green',
+                                     decreasing_line_color='red'))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], mode='lines', name='MA20', line=dict(color='blue')))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], mode='lines', name='MA50', line=dict(color='orange')))
+        fig.add_trace(go.Scatter(x=df.index, y=tenkan, mode='lines', name='Tenkan', line=dict(color='purple')))
+        fig.add_trace(go.Scatter(x=df.index, y=kijun, mode='lines', name='Kijun', line=dict(color='brown')))
+        fig.add_trace(go.Scatter(x=df.index, y=senkou_a, mode='lines', name='Senkou A', line=dict(color='green', dash='dot')))
+        fig.add_trace(go.Scatter(x=df.index, y=senkou_b, mode='lines', name='Senkou B', line=dict(color='red', dash='dot')))
 
-        # Candlestick
-        fig.add_trace(go.Candlestick(
-            x=df.index,
-            open=df['Open'],
-            high=df['High'],
-            low=df['Low'],
-            close=df['Close'],
-            name='Candlestick',
-            increasing_line_color='green',
-            decreasing_line_color='red'
-        ))
-
-        # MA20 & MA50
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['MA20'],
-            mode='lines',
-            name='MA20',
-            line=dict(color='blue', width=1)
-        ))
-        fig.add_trace(go.Scatter(
-            x=df.index,
-            y=df['MA50'],
-            mode='lines',
-            name='MA50',
-            line=dict(color='orange', width=1)
-        ))
-
-        # Support & Resistance
+        # Support / Resistance
         for level in sr['Support']:
-            fig.add_hline(
-                y=level,
-                line_dash="dash",
-                line_color="green",
-                annotation_text=f"Support: {level:.2f}",
-                annotation_position="bottom right"
-            )
+            fig.add_hline(y=level, line_dash="dash", line_color="green", annotation_text=f"S: {level:.2f}")
         for level in sr['Resistance']:
-            fig.add_hline(
-                y=level,
-                line_dash="dash",
-                line_color="red",
-                annotation_text=f"Resistance: {level:.2f}",
-                annotation_position="top right"
-            )
+            fig.add_hline(y=level, line_dash="dash", line_color="red", annotation_text=f"R: {level:.2f}")
 
-        # Fibonacci Levels — TERMASUK FIB_0.0 DAN FIB_1.0
-        fib_keys = ['Fib_0.0', 'Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618', 'Fib_0.786', 'Fib_1.0']
-        for key in fib_keys:
-            if key in fib and not np.isnan(fib[key]):
-                # Warna khusus untuk Fib_0.0 (magenta) dan Fib_1.0 (blue)
-                color = "magenta" if key == 'Fib_0.0' else "blue" if key == 'Fib_1.0' else "purple"
-                dash = "solid" if key in ['Fib_0.0', 'Fib_1.0'] else "dot"
-                position = "top left" if key in ['Fib_0.0', 'Fib_0.236', 'Fib_0.382'] else "bottom left"
-                position = "bottom left" if key == 'Fib_1.0' else position
+        fig.update_layout(title=f"{ticker}.JK - Analisa Teknikal",
+                          xaxis_rangeslider_visible=False,
+                          template="plotly_white",
+                          height=700)
 
-                fig.add_hline(
-                    y=fib[key],
-                    line_dash=dash,
-                    line_color=color,
-                    annotation_text=f"{key}: {fib[key]:.2f}",
-                    annotation_position=position
-                )
-
-        # Layout
-        fig.update_layout(
-            title=f"{ticker} Price Analysis",
-            xaxis_title="Date",
-            yaxis_title="Price (Rp)",
-            xaxis_rangeslider_visible=False,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            template="plotly_white",
-            height=600
-        )
-
-        # Tampilkan di Streamlit
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- TAMPILKAN INDIKATOR TEKNIKAL ---
+        # Indikator
         st.subheader("📊 Indikator Teknikal")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}")
+            st.metric("MA50", f"{df['MA50'].iloc[-1]:.2f}")
+        with c2:
+            st.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}")
+            st.metric("MFI", f"{mfi_value:.2f}", mfi_signal)
+        with c3:
+            st.metric("MACD", f"{df['MACD'].iloc[-1]:.2f}")
+            st.metric("Signal", f"{df['Signal'].iloc[-1]:.2f}")
 
-        col1, col2, col3 = st.columns(3)
+        # Kesimpulan
+        st.subheader("📌 Kesimpulan")
+        kesimpulan = []
+        if df['RSI'].iloc[-1] < 30: kesimpulan.append("RSI menunjukkan **Oversold** → potensi rebound.")
+        elif df['RSI'].iloc[-1] > 70: kesimpulan.append("RSI menunjukkan **Overbought** → potensi koreksi.")
+        if df['MACD'].iloc[-1] > df['Signal'].iloc[-1]: kesimpulan.append("MACD bullish crossover.")
+        else: kesimpulan.append("MACD bearish crossover.")
+        if df['Close'].iloc[-1] > df['SenkouA'].iloc[-1] and df['Close'].iloc[-1] > df['SenkouB'].iloc[-1]:
+            kesimpulan.append("Harga berada **di atas awan Ichimoku** → tren bullish.")
+        else:
+            kesimpulan.append("Harga berada **di bawah/di dalam awan Ichimoku** → tren lemah/bearish.")
+        if vol_anomali: kesimpulan.append("🚨 Terdapat lonjakan volume anomali.")
 
-        with col1:
-            st.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}" if not np.isnan(df['MA20'].iloc[-1]) else "N/A")
-            st.metric("MA50", f"{df['MA50'].iloc[-1]:.2f}" if not np.isnan(df['MA50'].iloc[-1]) else "N/A")
-
-        with col2:
-            st.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}" if not np.isnan(df['RSI'].iloc[-1]) else "N/A")
-            st.metric("MFI", f"{mfi_value:.2f}" if not np.isnan(mfi_value) else "N/A", mfi_signal)
-
-        with col3:
-            st.metric("Volume", f"{int(df['Volume'].iloc[-1]):,}" if not np.isnan(df['Volume'].iloc[-1]) else "N/A")
-            st.metric("Volume Anomali", "🚨 Ya" if vol_anomali else "Tidak")
-
-        # --- LEVEL PENTING ---
-        st.subheader("📍 Level Penting")
-        if sr['Support']:
-            st.write(f"**Support:** {' | '.join([f'{s:.2f}' for s in sr['Support']])}")
-        if sr['Resistance']:
-            st.write(f"**Resistance:** {' | '.join([f'{r:.2f}' for r in sr['Resistance']])}")
-
-        # --- LEVEL FIBONACCI ---
-        st.subheader("🔢 Level Fibonacci")
-        fib_display = {k: v for k, v in fib.items() if k in ['Fib_0.0', 'Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618', 'Fib_1.0']}
-        if fib_display:
-            cols = st.columns(len(fib_display))
-            for i, (key, value) in enumerate(fib_display.items()):
-                cols[i].metric(key.replace('Fib_', 'Fib '), f"{value:.2f}")
+        if kesimpulan:
+            for k in kesimpulan:
+                st.write("- " + k)
