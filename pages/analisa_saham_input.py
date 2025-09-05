@@ -121,6 +121,12 @@ def calculate_support_resistance(data):
         vwap,
         psych_level
     ]
+    # Tambahkan Fib_0.0 sebagai resistance & Fib_1.0 sebagai support
+    if not np.isnan(fib_levels['Fib_0.0']) and fib_levels['Fib_0.0'] > current_price:
+        resistance_levels.append(fib_levels['Fib_0.0'])
+    if not np.isnan(fib_levels['Fib_1.0']) and fib_levels['Fib_1.0'] < current_price:
+        support_levels.append(fib_levels['Fib_1.0'])
+
     valid_support = [lvl for lvl in support_levels if not np.isnan(lvl) and lvl < current_price]
     valid_resistance = [lvl for lvl in resistance_levels if not np.isnan(lvl) and lvl > current_price]
     valid_support.sort(reverse=True)
@@ -224,16 +230,22 @@ def app():
                 annotation_position="top right"
             )
 
-        # Fibonacci Levels
-        fib_keys = ['Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618']
+        # Fibonacci Levels — TERMASUK FIB_0.0 DAN FIB_1.0
+        fib_keys = ['Fib_0.0', 'Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618', 'Fib_0.786', 'Fib_1.0']
         for key in fib_keys:
-            if key in fib:
+            if key in fib and not np.isnan(fib[key]):
+                # Warna khusus untuk Fib_0.0 (magenta) dan Fib_1.0 (blue)
+                color = "magenta" if key == 'Fib_0.0' else "blue" if key == 'Fib_1.0' else "purple"
+                dash = "solid" if key in ['Fib_0.0', 'Fib_1.0'] else "dot"
+                position = "top left" if key in ['Fib_0.0', 'Fib_0.236', 'Fib_0.382'] else "bottom left"
+                position = "bottom left" if key == 'Fib_1.0' else position
+
                 fig.add_hline(
                     y=fib[key],
-                    line_dash="dot",
-                    line_color="purple",
+                    line_dash=dash,
+                    line_color=color,
                     annotation_text=f"{key}: {fib[key]:.2f}",
-                    annotation_position="top left" if "0." in key else "bottom left"
+                    annotation_position=position
                 )
 
         # Layout
@@ -243,7 +255,8 @@ def app():
             yaxis_title="Price (Rp)",
             xaxis_rangeslider_visible=False,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            template="plotly_white"
+            template="plotly_white",
+            height=600
         )
 
         # Tampilkan di Streamlit
@@ -275,7 +288,7 @@ def app():
 
         # --- LEVEL FIBONACCI ---
         st.subheader("🔢 Level Fibonacci")
-        fib_display = {k: v for k, v in fib.items() if k in ['Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618']}
+        fib_display = {k: v for k, v in fib.items() if k in ['Fib_0.0', 'Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618', 'Fib_1.0']}
         if fib_display:
             cols = st.columns(len(fib_display))
             for i, (key, value) in enumerate(fib_display.items()):
