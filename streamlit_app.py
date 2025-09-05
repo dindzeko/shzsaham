@@ -31,22 +31,22 @@ p {
 """
 add_css(css_styles)
 
-# Impor modul-modul halaman dari folder `page/`
+# Impor modul-modul halaman dari folder `pages/`
 try:
-    from page.home import app as home_app
-    from page.pisau_jatuh import app as pisau_jatuh_app
-    from page.analisa_saham_input import app as analisa_saham_input_app
-    from page.tarik_data_saham import app as tarik_data_saham_app
+    from pages.home import app as home_app
+    from pages.pisau_jatuh import app as pisau_jatuh_app
+    from pages.analisa_saham_input import app as analisa_saham_input_app
+    from pages.tarik_data_saham import app as tarik_data_saham_app
 except ImportError as e:
     st.error(f"Error importing modules: {str(e)}")
     st.stop()
 
 # Inisialisasi session state
-if "subpage" not in st.session_state:
-    st.session_state["subpage"] = None
+if "subpages" not in st.session_state:
+    st.session_state["subpages"] = None
 
 # ----------- HALAMAN UTAMA -----------
-def main_page():
+def main_pages():
     st.title("Selamat Datang di Aplikasi Saham SHZ")
     st.write("""
     Aplikasi ini merupakan berisi fitur:
@@ -82,8 +82,8 @@ def tarik_data_saham():
         st.error(f"Error: {str(e)}")
 
 # ----------- KONFIGURASI NAVIGASI -----------
-page_config = {
-    "Main Page": main_page,
+pages_config = {
+    "Main pages": main_pages,
     "Pisau Jatuh": pisau_jatuh,
     "Analisa Saham Input": analisa_saham_input,
     "Tarik Data Saham": tarik_data_saham,
@@ -93,20 +93,20 @@ page_config = {
 with st.sidebar:
     selected = option_menu(
         menu_title="Saham SHZ",
-        options=list(page_config.keys()),
+        options=list(pages_config.keys()),
         icons=["house", "knife", "chart-line", "download"],
         menu_icon="cast",
         default_index=0,
     )
 
 # Reset session state jika kembali ke halaman utama
-if selected == "Main Page":
-    st.session_state["subpage"] = None
+if selected == "Main pages":
+    st.session_state["subpages"] = None
 
 # ----------- RENDER HALAMAN -----------
 try:
-    if selected in page_config:
-        page_config[selected]()
+    if selected in pages_config:
+        pages_config[selected]()
     else:
         st.error("Halaman tidak ditemukan. Silakan pilih halaman lain dari menu navigasi.")
 except KeyError as e:
