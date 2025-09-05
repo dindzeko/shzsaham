@@ -3,50 +3,33 @@ from streamlit_option_menu import option_menu
 import os
 
 # ====================
+# SET PAGE CONFIG (TRIK: page_title kosong agar tidak muncul "streamlit app")
+# ====================
+st.set_page_config(
+    page_title="",  # <-- TRIK UTAMA: kosongkan agar tidak muncul "streamlit app"
+    page_icon="📊",
+    layout="centered",
+    initial_sidebar_state="expanded"
+)
+
+# ====================
 # Fungsi CSS Styling
 # ====================
 def add_css(css):
     st.markdown(f'<style>{css}</style>', unsafe_allow_html=True)
 
 # ====================
-# FULL CSS STYLING (Bersih & Profesional)
+# FULL CSS STYLING (BERSIH & MODERN)
 # ====================
 modern_css = """
 <style>
-/* --- Reset & Font --- */
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+/* --- HILANGKAN HEADER SIDEBAR DAN NAVIGASI OTOMATIS STREAMLIT --- */
+[data-testid="stSidebarHeader"],
+[data-testid="stSidebarNav"] > div {
+    display: none !important;
 }
 
-body {
-    font-family: 'Segoe UI', sans-serif;
-    background-color: #f5f7fa;
-    color: #333;
-}
-
-/* --- Header Utama --- */
-header {
-    background-color: #fff;
-    padding: 1.2rem 2rem;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-header h1 {
-    font-size: 2.4rem;
-    color: #2c3e50;
-    font-weight: 600;
-    letter-spacing: -0.5px;
-}
-
-/* --- Sidebar --- */
+/* --- Sidebar Styling --- */
 .sidebar .sidebar-content {
     background-color: #f8f9fa !important;
     padding: 25px !important;
@@ -55,20 +38,7 @@ header h1 {
     margin-top: 20px;
 }
 
-/* --- HILANGKAN STREAMLIT.APP DAN HEADER DEFAULT --- */
-[data-testid="stSidebarHeader"] {
-    display: none !important;
-}
-[data-testid="stSidebarNav"] > div {
-    display: none !important;
-}
-
-/* --- MENU OPTION --- */
-.sidebar .sidebar-content ul {
-    list-style: none;
-    padding: 0;
-}
-
+/* --- Menu Option Styling --- */
 .sidebar .sidebar-content ul li a {
     display: flex;
     align-items: center;
@@ -96,14 +66,33 @@ header h1 {
     text-align: center;
 }
 
-/* --- CONTENT UTAMA --- */
+/* --- Header Utama --- */
+header {
+    background-color: #fff;
+    padding: 1.2rem 2rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+header h1 {
+    font-size: 2.4rem;
+    color: #2c3e50;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+}
+
+/* --- Content Styling --- */
 .main .block-container {
     padding-top: 2rem !important;
     padding-left: 3rem !important;
     padding-right: 3rem !important;
 }
 
-/* --- JUDUL UTAMA --- */
 h1 {
     font-size: 2.8rem;
     color: #2c3e50;
@@ -121,7 +110,6 @@ h2 {
     font-weight: 600;
 }
 
-/* --- PARAGRAF --- */
 p {
     font-size: 1.1rem;
     line-height: 1.7;
@@ -130,7 +118,7 @@ p {
     text-align: justify;
 }
 
-/* --- FOOTER --- */
+/* --- Footer --- */
 footer {
     text-align: center;
     padding: 30px;
@@ -138,6 +126,17 @@ footer {
     font-size: 0.95rem;
     margin-top: 3rem;
     border-top: 1px solid #eee;
+}
+
+/* --- Responsive --- */
+@media (max-width: 768px) {
+    .main .block-container {
+        padding-left: 1rem !important;
+        padding-right: 1rem !important;
+    }
+    h1 {
+        font-size: 2.2rem;
+    }
 }
 </style>
 """
@@ -162,7 +161,7 @@ if "selected_page" not in st.session_state:
     st.session_state["selected_page"] = "Home"
 
 # ====================
-# NAVIGASI SIDEBAR
+# SIDEBAR NAVIGASI
 # ====================
 with st.sidebar:
     selected = option_menu(
@@ -202,3 +201,12 @@ elif st.session_state["selected_page"] == "Tarik Data Saham":
         tarik_data_saham_app()
     except Exception as e:
         st.error(f"Error: {str(e)}")
+
+# ====================
+# FOOTER
+# ====================
+st.markdown("""
+<footer>
+    © 2025 Saham SHZ — Dibuat untuk analisis saham profesional.
+</footer>
+""", unsafe_allow_html=True)
