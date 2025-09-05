@@ -8,14 +8,14 @@ import time
 
 # Konfigurasi halaman — HARUS DI LUAR app() untuk menghindari error
 st.set_page_config(
-    page_title="Aplikasi Tarik Data Saham",
+    page_title="Halaman Tarik Data Saham",
     page_icon="📊",
     layout="centered"
 )
 
 def app():
     # Judul aplikasi — cukup pakai st.title, tanpa banner HTML
-    st.title("📊 Aplikasi Tarik Data Saham")
+    st.title("📊 Halaman Tarik Data Saham")
 
     # Pilih Time Frame
     st.subheader("⚙️ Pengaturan Data")
