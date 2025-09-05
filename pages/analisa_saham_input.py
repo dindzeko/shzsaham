@@ -469,21 +469,7 @@ def generate_conclusion(df, mfi_value, macd_signal, bb_analysis, vol_anomali, pr
 
 # --- FUNGSI UTAMA ---
 def app():
-    st.title("📈 Analisa Teknikal Saham Lengkap")
-    
-    # Informasi di sidebar
-    with st.sidebar:
-        st.header("ℹ️ Informasi Aplikasi")
-        st.markdown("""
-        Aplikasi ini menyediakan analisis teknikal saham secara komprehensif dengan:
-        - Analisis Bollinger Bands mendalam
-        - Deteksi Bollinger Squeeze
-        - Analisis konvergensi multi-indikator
-        - Rekomendasi berbasis scoring
-        - Konteks pasar secara keseluruhan
-        """)
-        st.markdown("---")
-        st.caption("© 2023 Analisa Saham Indonesia")
+    st.title("📈 Analisa Teknikal Saham SHZ")
     
     ticker_input = st.text_input("Masukkan Kode Saham (contoh: BBCA)", value="BBCA")
     analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
