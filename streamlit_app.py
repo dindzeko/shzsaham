@@ -78,14 +78,12 @@ def pisau_jatuh():
         st.error(f"Error: {str(e)}")
 
 def analisa_saham():
-    st.title("Analisa Saham")
     try:
         analisa_saham_input_app()
     except Exception as e:
         st.error(f"Error: {str(e)}")
 
 def tarik_data_saham():
-    st.title("Tarik Data Saham")
     try:
         tarik_data_saham_app()
     except Exception as e:
