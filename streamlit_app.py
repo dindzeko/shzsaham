@@ -4,7 +4,7 @@ import os
 
 # Konfigurasi halaman utama
 st.set_page_config(
-    page_title="AuditApp",
+    page_title="SHZ SAHAM",
     page_icon="🔍",
     layout="centered",
     initial_sidebar_state="expanded"
