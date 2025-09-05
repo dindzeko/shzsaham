@@ -174,4 +174,78 @@ def app():
         mfi_value = df['MFI'].iloc[-1] if not df['MFI'].empty else np.nan
         mfi_signal = interpret_mfi(mfi_value) if not np.isnan(mfi_value) else "N/A"
 
-        # Plot graf
+        # Plot grafik
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Candlestick'
+        ))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], name='MA20', line=dict(color='blue', width=1)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='MA50', line=dict(color='orange', width=1)))
+
+        # Tambahkan level
+        for level in sr['Support']:
+            fig.add_hline(y=level, line_dash="dash", line_color="green", annotation_text=f"Support: {level:.2f}")
+        for level in sr['Resistance']:
+            fig.add_hline(y=level, line_dash="dash", line_color="red", annotation_text=f"Resistance: {level:.2f}")
+        for key, value in fib.items():
+            if "Fib" in key:
+                fig.add_hline(y=value, line_dash="dot", line_color="purple", annotation_text=f"{key}: {value:.2f}")
+
+        fig.update_layout(
+            title=f"{ticker} Price Analysis",
+            xaxis_title="Date",
+            yaxis_title="Price",
+            xaxis_rangeslider_visible=False,
+            height=600
+        )
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # --- EXPORT GRAFIK ---
+        st.subheader("💾 Export Grafik")
+
+        # PNG
+        png_bytes = fig.to_image(format="png", width=1200, height=800, scale=2)
+        st.download_button(
+            label="📷 Unduh sebagai PNG",
+            data=png_bytes,
+            file_name=f"{ticker.replace('.JK', '')}_analisis_{datetime.today().strftime('%Y%m%d')}.png",
+            mime="image/png"
+        )
+
+        # PDF (butuh kaleido)
+        try:
+            pdf_bytes = fig.to_image(format="pdf", width=1200, height=800)
+            st.download_button(
+                label="📄 Unduh sebagai PDF",
+                data=pdf_bytes,
+                file_name=f"{ticker.replace('.JK', '')}_analisis_{datetime.today().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf"
+            )
+        except Exception:
+            st.info("ℹ️ Install `kaleido` untuk export PDF: `pip install kaleido`")
+
+        # Tampilkan metrik
+        st.subheader("📌 Indikator Teknikal")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("MA20", f"{df['MA20'].iloc[-1]:.2f}" if not np.isnan(df['MA20'].iloc[-1]) else "N/A")
+        col1.metric("MA50", f"{df['MA50'].iloc[-1]:.2f}" if not np.isnan(df['MA50'].iloc[-1]) else "N/A")
+        col2.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}" if not np.isnan(df['RSI'].iloc[-1]) else "N/A")
+        col2.metric("MFI", f"{mfi_value:.2f}" if not np.isnan(mfi_value) else "N/A", mfi_signal)
+        col3.metric("Volume", f"{int(df['Volume'].iloc[-1]):,}" if not np.isnan(df['Volume'].iloc[-1]) else "N/A")
+
+        st.subheader("📍 Level Penting")
+        st.write(f"**Support:** {' | '.join([f'{s:.2f}' for s in sr['Support']])}")
+        st.write(f"**Resistance:** {' | '.join([f'{r:.2f}' for r in sr['Resistance']])}")
+
+        st.subheader("🔢 Level Fibonacci")
+        fib_cols = st.columns(4)
+        fib_cols[0].metric("Fib 0.236", f"{fib.get('Fib_0.236', 0):.2f}")
+        fib_cols[1].metric("Fib 0.382", f"{fib.get('Fib_0.382', 0):.2f}")
+        fib_cols[2].metric("Fib 0.5", f"{fib.get('Fib_0.5', 0):.2f}")
+        fib_cols[3].metric("Fib 0.618", f"{fib.get('Fib_0.618', 0):.2f}")
