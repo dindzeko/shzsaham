@@ -71,7 +71,6 @@ def main_pages():
     """)
 
 def pisau_jatuh():
-    st.title("Pisau Jatuh")
     try:
         pisau_jatuh_app()
     except Exception as e:
