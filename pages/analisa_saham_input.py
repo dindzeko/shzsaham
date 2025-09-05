@@ -1,12 +1,11 @@
 # pages/analisa_saham_input.py
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import yfinance as yf
 from datetime import datetime, timedelta
+import numpy as np
+import plotly.graph_objects as go
 from scipy.signal import argrelextrema
-import matplotlib.dates as mdates
 
 # --- FUNGSI ANALISIS TEKNIKAL ---
 def compute_rsi(close, period=14):
@@ -176,48 +175,79 @@ def app():
         df['Avg_Volume_20'] = df['Volume'].rolling(window=20).mean()
         vol_anomali = (df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]) if not df['Avg_Volume_20'].isna().iloc[-1] else False
 
-        # --- PLOT GRAFIK (DIPERBAIKI) ---
-        fig, ax = plt.subplots(figsize=(14, 8))
+        # --- PLOT GRAFIK (PLOTLY) ---
+        fig = go.Figure()
 
-        # Candlestick Chart
-        colors = ['green' if c > o else 'red' for c, o in zip(df['Close'], df['Open'])]
-        ax.bar(df.index, df['Close'] - df['Open'], color=colors, edgecolor='black', linewidth=0.5, zorder=3)
-        ax.bar(df.index, df['High'] - df['Close'], color='green', edgecolor='black', linewidth=0.5, zorder=2)
-        ax.bar(df.index, df['Open'] - df['Low'], color='red', edgecolor='black', linewidth=0.5, zorder=2)
+        # Candlestick
+        fig.add_trace(go.Candlestick(
+            x=df.index,
+            open=df['Open'],
+            high=df['High'],
+            low=df['Low'],
+            close=df['Close'],
+            name='Candlestick',
+            increasing_line_color='green',
+            decreasing_line_color='red'
+        ))
 
         # MA20 & MA50
-        ax.plot(df.index, df['MA20'], label='MA20', color='blue', linewidth=1.5, zorder=4)
-        ax.plot(df.index, df['MA50'], label='MA50', color='orange', linewidth=1.5, zorder=4)
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['MA20'],
+            mode='lines',
+            name='MA20',
+            line=dict(color='blue', width=1)
+        ))
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=df['MA50'],
+            mode='lines',
+            name='MA50',
+            line=dict(color='orange', width=1)
+        ))
 
         # Support & Resistance
         for level in sr['Support']:
-            ax.axhline(y=level, color='green', linestyle='--', alpha=0.7, linewidth=1.5, label=f'Support {level:.2f}')
+            fig.add_hline(
+                y=level,
+                line_dash="dash",
+                line_color="green",
+                annotation_text=f"Support: {level:.2f}",
+                annotation_position="bottom right"
+            )
         for level in sr['Resistance']:
-            ax.axhline(y=level, color='red', linestyle='--', alpha=0.7, linewidth=1.5, label=f'Resistance {level:.2f}')
+            fig.add_hline(
+                y=level,
+                line_dash="dash",
+                line_color="red",
+                annotation_text=f"Resistance: {level:.2f}",
+                annotation_position="top right"
+            )
 
         # Fibonacci Levels
-        fib_colors = ['purple', 'magenta', 'cyan', 'brown']
         fib_keys = ['Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618']
-        for i, key in enumerate(fib_keys):
+        for key in fib_keys:
             if key in fib:
-                ax.axhline(y=fib[key], color=fib_colors[i % len(fib_colors)], linestyle=':', alpha=0.8, linewidth=1.2, label=f'{key} {fib[key]:.2f}')
+                fig.add_hline(
+                    y=fib[key],
+                    line_dash="dot",
+                    line_color="purple",
+                    annotation_text=f"{key}: {fib[key]:.2f}",
+                    annotation_position="top left" if "0." in key else "bottom left"
+                )
 
-        # Set labels & title
-        ax.set_title(f"{ticker} - Price Analysis", fontsize=16, fontweight='bold', pad=20)
-        ax.set_xlabel("Date", fontsize=12)
-        ax.set_ylabel("Price (Rp)", fontsize=12)
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper left', fontsize=9, ncol=2, frameon=True, fancybox=True, shadow=True)
-
-        # Format x-axis to show dates properly
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d\n%Y'))
-        ax.tick_params(axis='x', rotation=0)
-
-        # Adjust layout
-        plt.tight_layout()
+        # Layout
+        fig.update_layout(
+            title=f"{ticker} Price Analysis",
+            xaxis_title="Date",
+            yaxis_title="Price (Rp)",
+            xaxis_rangeslider_visible=False,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            template="plotly_white"
+        )
 
         # Tampilkan di Streamlit
-        st.pyplot(fig)
+        st.plotly_chart(fig, use_container_width=True)
 
         # --- TAMPILKAN INDIKATOR TEKNIKAL ---
         st.subheader("📊 Indikator Teknikal")
