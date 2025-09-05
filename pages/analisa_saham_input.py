@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from scipy.signal import argrelextrema
+import matplotlib.dates as mdates
 
 # --- FUNGSI ANALISIS TEKNIKAL ---
 def compute_rsi(close, period=14):
@@ -175,38 +176,44 @@ def app():
         df['Avg_Volume_20'] = df['Volume'].rolling(window=20).mean()
         vol_anomali = (df['Volume'].iloc[-1] > 1.7 * df['Avg_Volume_20'].iloc[-1]) if not df['Avg_Volume_20'].isna().iloc[-1] else False
 
-        # --- PLOT GRAFIK ---
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # --- PLOT GRAFIK (DIPERBAIKI) ---
+        fig, ax = plt.subplots(figsize=(14, 8))
 
-        # Plot candlestick
+        # Candlestick Chart
         colors = ['green' if c > o else 'red' for c, o in zip(df['Close'], df['Open'])]
         ax.bar(df.index, df['Close'] - df['Open'], color=colors, edgecolor='black', linewidth=0.5, zorder=3)
         ax.bar(df.index, df['High'] - df['Close'], color='green', edgecolor='black', linewidth=0.5, zorder=2)
         ax.bar(df.index, df['Open'] - df['Low'], color='red', edgecolor='black', linewidth=0.5, zorder=2)
 
-        # Plot MA20 & MA50
-        ax.plot(df.index, df['MA20'], label='MA20', color='blue', linewidth=1, zorder=4)
-        ax.plot(df.index, df['MA50'], label='MA50', color='orange', linewidth=1, zorder=4)
+        # MA20 & MA50
+        ax.plot(df.index, df['MA20'], label='MA20', color='blue', linewidth=1.5, zorder=4)
+        ax.plot(df.index, df['MA50'], label='MA50', color='orange', linewidth=1.5, zorder=4)
 
-        # Plot Support & Resistance
+        # Support & Resistance
         for level in sr['Support']:
-            ax.axhline(y=level, color='green', linestyle='--', label=f'Support {level:.2f}', zorder=1)
+            ax.axhline(y=level, color='green', linestyle='--', alpha=0.7, linewidth=1.5, label=f'Support {level:.2f}')
         for level in sr['Resistance']:
-            ax.axhline(y=level, color='red', linestyle='--', label=f'Resistance {level:.2f}', zorder=1)
+            ax.axhline(y=level, color='red', linestyle='--', alpha=0.7, linewidth=1.5, label=f'Resistance {level:.2f}')
 
-        # Plot Fibonacci
+        # Fibonacci Levels
         fib_colors = ['purple', 'magenta', 'cyan', 'brown']
         fib_keys = ['Fib_0.236', 'Fib_0.382', 'Fib_0.5', 'Fib_0.618']
         for i, key in enumerate(fib_keys):
             if key in fib:
-                ax.axhline(y=fib[key], color=fib_colors[i % len(fib_colors)], linestyle=':', label=f'{key} {fib[key]:.2f}', zorder=1)
+                ax.axhline(y=fib[key], color=fib_colors[i % len(fib_colors)], linestyle=':', alpha=0.8, linewidth=1.2, label=f'{key} {fib[key]:.2f}')
 
-        ax.set_title(f"{ticker} - Price Analysis", fontsize=14, fontweight='bold')
+        # Set labels & title
+        ax.set_title(f"{ticker} - Price Analysis", fontsize=16, fontweight='bold', pad=20)
         ax.set_xlabel("Date", fontsize=12)
         ax.set_ylabel("Price (Rp)", fontsize=12)
         ax.grid(True, alpha=0.3)
-        ax.legend(loc='upper left', fontsize=9, ncol=2)
-        plt.xticks(rotation=45)
+        ax.legend(loc='upper left', fontsize=9, ncol=2, frameon=True, fancybox=True, shadow=True)
+
+        # Format x-axis to show dates properly
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %d\n%Y'))
+        ax.tick_params(axis='x', rotation=0)
+
+        # Adjust layout
         plt.tight_layout()
 
         # Tampilkan di Streamlit
