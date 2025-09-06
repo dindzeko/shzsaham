@@ -962,6 +962,3 @@ def create_technical_chart(df, sr, is_squeeze):
             st.info("⚠️ **Disclaimer**: Analisis ini hanya untuk tujuan edukasi dan bukan sebagai rekomendasi investasi. "
                     "Harga saham bisa berubah sewaktu-waktu. Lakukan riset tambahan dan konsultasi dengan "
                     "penasihat keuangan sebelum mengambil keputusan investasi.")
-
-if __name__ == "__main__":
-    main()
