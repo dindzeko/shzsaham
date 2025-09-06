@@ -799,17 +799,24 @@ def app():
             # Hitung nilai transaksi
             transaction_value = latest_close * latest_volume
             
-            # Tampilkan dalam kolom
+            # Tampilkan dalam kolom menggunakan st.write untuk menghindari pemotongan
             vol_cols = st.columns(4)
             with vol_cols[0]:
-                st.metric("Harga Penutupan Terakhir", f"Rp {latest_close:,.2f}", 
-                         delta=f"{price_change_pct:.2f}% ({'+' if price_change_abs >= 0 else ''}{price_change_abs:.2f})")
+                st.write("**Harga Penutupan Terakhir**")
+                st.write(f"Rp {latest_close:,.2f}")
+                if price_change_pct < 0:
+                    st.markdown(f"<span style='color:red; font-size:14px;'>↓ {price_change_pct:.2f}% ({price_change_abs:.2f})</span>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<span style='color:green; font-size:14px;'>↑ {price_change_pct:.2f}% (+{price_change_abs:.2f})</span>", unsafe_allow_html=True)
             with vol_cols[1]:
-                st.metric("Volume Saham (Lot)", f"{latest_volume:,} lot")
+                st.write("**Volume Saham (Lot)**")
+                st.write(f"{latest_volume:,} lot")
             with vol_cols[2]:
-                st.metric("Volume Transaksi (Rp)", f"Rp {transaction_value:,.0f}")
+                st.write("**Volume Transaksi (Rp)**")
+                st.write(f"Rp {transaction_value:,.0f}")
             with vol_cols[3]:
-                st.metric("Rata-rata Volume 5 Hari", f"{avg_volume_5d:,.0f} lot")
+                st.write("**Rata-rata Volume 5 Hari**")
+                st.write(f"{avg_volume_5d:,.0f} lot")
             # --- AKHIR TAMBAHAN ---
 
             # Tampilkan detail skor indikator
