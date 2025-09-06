@@ -809,12 +809,12 @@ def generate_bandarmology_report(df, period=30):
         report['trend_assessment'] = "Sideways atau trend tidak jelas"
     
     # Kesimpulan bandarmology
-    conclusion = generate_bandarmology_conclusion(report)
+    conclusion = generate_bandarmology_conclusion(report, df['Close'].iloc[-1])
     report['conclusion'] = conclusion
     
     return report, df_with_indicators
 
-def generate_bandarmology_conclusion(report):
+def generate_bandarmology_conclusion(report, current_price):
     """
     Menghasilkan kesimpulan bandarmology berdasarkan analisis
     """
@@ -845,7 +845,6 @@ def generate_bandarmology_conclusion(report):
         conclusion.append("🎯 **Climax Action terdeteksi** - Kemungkinan exhaustion move")
     
     # Analisis volume profile
-    current_price = df['Close'].iloc[-1] # Akan diisi saat fungsi dipanggil
     if current_price > volume_profile['value_area_high']:
         conclusion.append("🚀 **Harga di atas Value Area** - Kondisi bullish dengan ruang untuk lanjut")
     elif current_price < volume_profile['value_area_low']:
