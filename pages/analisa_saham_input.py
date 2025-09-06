@@ -307,6 +307,23 @@ class IndicatorScoringSystem:
         else:
             return "Rendah"
 
+    def interpret_composite_score(self, score):
+        """Memberikan interpretasi teks untuk composite score"""
+        if score >= 0.7:
+            return "Sangat Bullish - Sentimen beli sangat kuat"
+        elif score >= 0.4:
+            return "Bullish Kuat - Sentimen beli kuat"
+        elif score >= 0.1:
+            return "Bullish Lemah - Sentimen cenderung beli"
+        elif score > -0.1:
+            return "Netral - Sentimen tidak jelas"
+        elif score > -0.4:
+            return "Bearish Lemah - Sentimen cenderung jual"
+        elif score > -0.7:
+            return "Bearish Kuat - Sentimen jual kuat"
+        else:
+            return "Sangat Bearish - Sentimen jual sangat kuat"
+
 # --- FUNGSI BREAKOUT DETECTION ---
 class BreakoutDetector:
     def __init__(self, atr_period=14, buffer_percent=0.005):
@@ -596,7 +613,7 @@ def create_technical_chart(df, sr, is_squeeze):
         fig.add_annotation(
             x=df.index[-1],
             y=df['Close'].iloc[-1],
-            text="â  ï¸  BOLLINGER SQUEEZE",
+            text="BOLLINGER SQUEEZE",
             showarrow=True,
             arrowhead=1,
             arrowsize=1,
@@ -619,7 +636,7 @@ def create_technical_chart(df, sr, is_squeeze):
 
 # --- FUNGSI UTAMA APLIKASI STREAMLIT ---
 def app():
-    st.title("ðŸ“Š Analisa Teknikal Saham dengan Cross-Confirmation")
+    st.title("📊 Analisa Teknikal Saham dengan Cross-Confirmation")
     # Input parameter
     col1, col2 = st.columns(2)
     with col1:
@@ -627,10 +644,10 @@ def app():
         account_size = st.number_input("Modal (Rp)", value=100000000, step=10000000)
         risk_percent = st.slider("Risiko per Trade (%)", 0.5, 5.0, 2.0) / 100
     with col2:
-        analysis_date = st.date_input("ð“… Tanggal Analisis", value=datetime.today())
+        analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
         use_multi_timeframe = st.checkbox("Gunakan Konfirmasi Multi-Timeframe", value=True)
 
-    if st.button("ðš€ Mulai Analisis"):
+    if st.button("🚀 Mulai Analisis"):
         with st.spinner('Sedang mengambil dan menganalisis data...'):
             time.sleep(1)
             if not ticker_input.strip():
@@ -697,6 +714,7 @@ def app():
             # Hitung composite score dan confidence
             composite_score = scoring_system.calculate_composite_score(scores)
             confidence = scoring_system.get_confidence_level(composite_score, scores)
+            interpretation = scoring_system.interpret_composite_score(composite_score)
 
             # Deteksi breakout
             breakout_detector = BreakoutDetector()
@@ -710,23 +728,23 @@ def app():
 
             # --- TAMBAHAN: Tampilkan Tabel Support, Resistance, dan Fibonacci ---
             # Tabel Support dan Resistance
-            st.subheader("ðŸ“ˆ Tabel Support dan Resistance")
+            st.subheader("📈 Tabel Support dan Resistance")
             sr_data = []
             for i, level in enumerate(sr['Support']):
                 sr_data.append({"Level": f"Support {i+1}", "Harga": f"Rp {level:,.2f}"})
             for i, level in enumerate(sr['Resistance']):
                 sr_data.append({"Level": f"Resistance {i+1}", "Harga": f"Rp {level:,.2f}"})
 
-            if sr_data:
+            if sr_data:  # Periksa apakah ada data
                 sr_df = pd.DataFrame(sr_data)
                 st.table(sr_df)
             else:
                 st.write("Tidak ada level Support/Resistance yang ditemukan.")
 
             # Tabel Fibonacci
-            st.subheader("ðŸ“Š Tabel Level Fibonacci")
+            st.subheader("📊 Tabel Level Fibonacci")
             fib_data = [{"Level": key, "Harga": f"Rp {value:,.2f}"} for key, value in sr['Fibonacci'].items()]
-            if fib_data:
+            if fib_data:  # Periksa apakah ada data
                 fib_df = pd.DataFrame(fib_data)
                 st.table(fib_df)
             else:
@@ -734,7 +752,7 @@ def app():
             # --- AKHIR TAMBAHAN ---
 
             # Tampilkan hasil
-            st.subheader("ðš¯ Hasil Analisis Cross-Confirmation")
+            st.subheader("🎯 Hasil Analisis Cross-Confirmation")
 
             # Tampilkan composite score dengan gauge chart
             fig_gauge = go.Figure(go.Indicator(
@@ -761,11 +779,41 @@ def app():
             fig_gauge.update_layout(height=300)
             st.plotly_chart(fig_gauge, use_container_width=True)
 
-            # Tampilkan confidence level
-            st.metric("Tingkat Keyakinan", confidence)
+            # Tampilkan interpretasi composite score
+            st.info(f"**Interpretasi Composite Score:** {interpretation}")
+            st.write(f"**Tingkat Keyakinan:** {confidence}")
+
+            # --- TAMBAHAN: Tampilkan Data Volume dan Perubahan Harga ---
+            st.subheader("📊 Data Volume dan Perubahan Harga Terkini")
+            
+            # Ambil data terakhir
+            latest_close = df['Close'].iloc[-1]
+            previous_close = df['Close'].iloc[-2]
+            latest_volume = df['Volume'].iloc[-1]
+            avg_volume_5d = df['Volume'].rolling(5).mean().iloc[-1]
+            
+            # Hitung perubahan harga
+            price_change_abs = latest_close - previous_close
+            price_change_pct = (price_change_abs / previous_close) * 100
+            
+            # Hitung nilai transaksi
+            transaction_value = latest_close * latest_volume
+            
+            # Tampilkan dalam kolom
+            vol_cols = st.columns(4)
+            with vol_cols[0]:
+                st.metric("Harga Penutupan Terakhir", f"Rp {latest_close:,.2f}", 
+                         delta=f"{price_change_pct:.2f}% ({'+' if price_change_abs >= 0 else ''}{price_change_abs:.2f})")
+            with vol_cols[1]:
+                st.metric("Volume Saham (Lot)", f"{latest_volume:,} lot")
+            with vol_cols[2]:
+                st.metric("Volume Transaksi (Rp)", f"Rp {transaction_value:,.0f}")
+            with vol_cols[3]:
+                st.metric("Rata-rata Volume 5 Hari", f"{avg_volume_5d:,.0f} lot")
+            # --- AKHIR TAMBAHAN ---
 
             # Tampilkan detail skor indikator
-            st.subheader("ð“Š Detail Skor Indikator")
+            st.subheader("🔍 Detail Skor Indikator")
             indicator_cols = st.columns(3)
             with indicator_cols[0]:
                 st.metric("RSI", f"{df['RSI'].iloc[-1]:.2f}",
@@ -789,7 +837,7 @@ def app():
                          delta=f"Skor: {scores['adx'][0]:.2f} (Kekuatan: {scores['adx'][1]:.2f})")
 
             # Tampilkan analisis akumulasi/distribusi
-            st.subheader("ð“¦ Analisis Akumulasi/Distribusi")
+            st.subheader("💼 Analisis Akumulasi/Distribusi")
             acc_cols = st.columns(2)
             with acc_cols[0]:
                 st.metric("Status", accumulation_status)
@@ -813,7 +861,7 @@ def app():
                 st.plotly_chart(fig_volume, use_container_width=True)
 
             # Tampilkan rekomendasi trading
-            st.subheader("ðš¯ Rekomendasi Trading")
+            st.subheader("🎯 Rekomendasi Trading")
             # Generate trading plan jika ada breakout
             trading_plan = None
             if resistance_breakout and volume_confirm:
@@ -824,7 +872,7 @@ def app():
                     df, "support", sr['Support'][0], buffer, account_size)
 
             if trading_plan:
-                st.success("ðš€ **Sinyal Breakout Terdeteksi!**")
+                st.success("🚀 **Sinyal Breakout Terdeteksi!**")
                 plan_cols = st.columns(2)
                 with plan_cols[0]:
                     st.metric("Jenis Sinyal", trading_plan["type"])
@@ -844,7 +892,7 @@ def app():
                 """)
             else:
                 # Tampilkan kondisi saat ini dan level untuk monitor
-                st.warning("â ³ **Belum Terdeteksi Breakout yang Kuat**")
+                st.warning("⚠️ **Belum Terdeteksi Breakout yang Kuat**")
                 if sr['Resistance']:
                     st.write(f"**Resistance Terdekat:** Rp {sr['Resistance'][0]:,.2f}")
                     st.write(f"**Syarat Breakout Bullish:** Close > Rp {sr['Resistance'][0] * (1 + buffer):,.2f} dengan volume > 1.5x rata-rata")
@@ -853,13 +901,13 @@ def app():
                     st.write(f"**Syarat Breakdown Bearish:** Close < Rp {sr['Support'][0] * (1 - buffer):,.2f} dengan volume > 1.5x rata-rata")
 
             # Tampilkan chart teknikal lengkap
-            st.subheader("ð“Š Chart Teknikal Lengkap")
+            st.subheader("📈 Chart Teknikal Lengkap")
             # Buat chart dengan Plotly
             fig = create_technical_chart(df, sr, is_squeeze)
             st.plotly_chart(fig, use_container_width=True)
 
             # Disclaimer
-            st.info("â  ï¸ **Disclaimer**: Analisis ini hanya untuk tujuan edukasi dan bukan sebagai rekomendasi investasi. "
+            st.info("**Disclaimer**: Analisis ini hanya untuk tujuan edukasi dan bukan sebagai rekomendasi investasi. "
                     "Harga saham bisa berubah sewaktu-waktu. Lakukan riset tambahan dan konsultasi dengan "
                     "penasihat keuangan sebelum mengambil keputusan investasi.")
 
