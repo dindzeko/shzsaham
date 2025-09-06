@@ -337,7 +337,7 @@ class BreakoutDetector:
         avg_volume = df['Volume'].rolling(20).mean().iloc[-1]
         # Hitung ATR untuk menentukan buffer dinamis
         atr = compute_atr(df['High'], df['Low'], df['Close'], self.atr_period).iloc[-1]
-        atr_buffer = atr / df['Close'].il极
+        atr_buffer = atr / df['Close'].iloc[-1]  # Buffer sebagai % dari harga
         # Gunakan buffer yang lebih besar antara fixed % dan ATR-based
         buffer = max(self.buffer_percent, atr_buffer * 0.5)
         # Kondisi breakout resistance
@@ -360,11 +360,11 @@ class BreakoutDetector:
     def generate_trading_plan(self, df, breakout_type, level, buffer, account_size=100000000):
         """Membuat rencana trading untuk breakout"""
         current_close = df['Close'].iloc[-1]
-        atr = compute_atr(df['High'], df['Low'], df['Close'], self.atr极
+        atr = compute_atr(df['High'], df['Low'], df['Close'], self.atr_period).iloc[-1]
         if breakout_type == "resistance":
             entry_price = level * (1 + buffer)  # Entry di atas resistance dengan buffer
             stop_loss = entry_price - 2 * atr  # Stop loss 2 ATR di bawah entry
-            target_1 = entry_price + 2 * at极
+            target_1 = entry_price + 2 * atr  # Target 1: 2 ATR
             target_2 = entry_price + 4 * atr  # Target 2: 4 ATR
             position_size = self.calculate_position_size(entry_price, stop_loss, account_size)
             return {
@@ -377,16 +377,16 @@ class BreakoutDetector:
                 "risk_reward": round((target_1 - entry_price) / (entry_price - stop_loss), 2)
             }
         elif breakout_type == "support":
-            entry_price = level * (极
+            entry_price = level * (1 - buffer)  # Entry di bawah support dengan buffer
             stop_loss = entry_price + 2 * atr  # Stop loss 2 ATR di atas entry
             target_1 = entry_price - 2 * atr  # Target 1: 2 ATR
-            target_2 = entry_price - 4 * atr  # Target 极
+            target_2 = entry_price - 4 * atr  # Target 2: 4 ATR
             position_size = self.calculate_position_size(entry_price, stop_loss, account_size)
             return {
                 "type": "Bearish Breakdown",
                 "entry": round(entry_price, 2),
                 "stop_loss": round(stop_loss, 2),
-极
+                "target_1": round(target_1, 2),
                 "target_2": round(target_2, 2),
                 "position_size": round(position_size),
                 "risk_reward": round((entry_price - target_1) / (stop_loss - entry_price), 2)
@@ -397,7 +397,7 @@ class BreakoutDetector:
 def detect_accumulation_distribution(df, period=5):
     """Mendeteksi pola akumulasi atau distribusi"""
     # Hitung indikator akumulasi/distribusi
-    adl = compute_adl(df['High'], df['Low'],极
+    adl = compute_adl(df['High'], df['Low'], df['Close'], df['Volume'])
     obv = compute_obv(df['Close'], df['Volume'])
     mfi = compute_mfi_corrected(df, 14)
     # Hitung perubahan 5 hari terakhir
@@ -409,10 +409,10 @@ def detect_accumulation_distribution(df, period=5):
     # Price action analysis
     price_change = (df['Close'].iloc[-1] - df['Close'].iloc[-period]) / df['Close'].iloc[-period] * 100
     vwap = compute_vwap(df['High'], df['Low'], df['Close'], df['Volume'])
-    price_vs_vwap = (df['极
+    price_vs_vwap = (df['Close'].iloc[-1] - vwap.iloc[-1]) / vwap.iloc[-1] * 100
     # Skor akumulasi/distribusi
     accumulation_score = 0
-    distribution极
+    distribution_score = 0
     # Aturan untuk akumulasi
     if adl_change > 2: accumulation_score += 1
     if obv_change > 3: accumulation_score += 1
@@ -433,7 +433,7 @@ def detect_accumulation_distribution(df, period=5):
     else:
         return "Netral", accumulation_score, distribution_score
 
-def calculate_volume_profile(df, period=5, bins=10):
+def calculate_volume_profile(df, period=20, bins=20):
     """Menghitung volume profile untuk periode tertentu"""
     recent_data = df.iloc[-period:]
     # Buat bins berdasarkan range harga
@@ -455,7 +455,7 @@ def calculate_volume_profile(df, period=5, bins=10):
                 overlap_low = max(bin_low, row['Low'])
                 overlap_high = min(bin_high, row['High'])
                 overlap = max(0, overlap_high - overlap_low)
-                volume_by极
+                volume_by_bin[i] += overlap * volume_per_price
     # Temukan bin dengan volume tertinggi
     max_volume_bin = np.argmax(volume_by_bin)
     price_zone_low = bin_edges[max_volume_bin]
@@ -471,14 +471,14 @@ def get_stock_data(ticker, end_date):
         data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
         if data.empty:
             # Coba lagi dengan tanggal yang lebih awal jika diperlukan
-            start_date =极
-            data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%极
+            start_date = end_date - timedelta(days=360)
+            data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
         return data if not data.empty else None
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
 
-def identify_significant_swings(df, window=60,极
+def identify_significant_swings(df, window=60, min_swing_size=0.05):
     """Mengidentifikasi swing signifikan dengan ukuran minimum perubahan"""
     highs = df['High']
     lows = df['Low']
@@ -486,7 +486,7 @@ def identify_significant_swings(df, window=60,极
     order = max(5, window // 12)
     max_idx = argrelextrema(highs.values, np.greater, order=order)[0]
     min_idx = argrelextrema(lows.values, np.less, order=order)[0]
-    recent_highs = highs.iloc[max_idx][-10:] if len(max_idx极
+    recent_highs = highs.iloc[max_idx][-10:] if len(max_idx) > 0 else pd.Series()
     recent_lows = lows.iloc[min_idx][-10:] if len(min_idx) > 0 else pd.Series()
     if len(recent_highs) == 0 or len(recent_lows) == 0:
         return df['High'].max(), df['Low'].min()
@@ -494,7 +494,7 @@ def identify_significant_swings(df, window=60,极
     significant_highs = []
     significant_lows = []
     for i in range(1, len(recent_highs)):
-        change = (recent_highs.iloc[i] - recent_highs.iloc[i-1]) / recent_high极
+        change = (recent_highs.iloc[i] - recent_highs.iloc[i-1]) / recent_highs.iloc[i-1]
         if abs(change) > min_swing_size:
             significant_highs.append(recent_highs.iloc[i])
     for i in range(1, len(recent_lows)):
@@ -511,11 +511,11 @@ def calculate_fibonacci_levels(swing_high, swing_low):
     return {
         'Fib_0.0': round(swing_high, 2),
         'Fib_0.236': round(swing_high - 0.236 * diff, 2),
-        'Fib_0.极
+        'Fib_0.382': round(swing_high - 0.382 * diff, 2),
         'Fib_0.5': round(swing_high - 0.5 * diff, 2),
-        'Fib_0.618': round极
+        'Fib_0.618': round(swing_high - 0.618 * diff, 2),
         'Fib_0.786': round(swing_high - 0.786 * diff, 2),
-        '极
+        'Fib_1.0': round(swing_low, 2)
     }
 
 def find_psychological_levels(close_price):
@@ -534,7 +534,7 @@ def calculate_support_resistance(data):
     # Moving averages
     ma20 = df['Close'].rolling(20).mean().iloc[-1]
     ma50 = df['Close'].rolling(50).mean().iloc[-1]
-    ma100 = df['Close'].rolling(100).mean().极
+    ma100 = df['Close'].rolling(100).mean().iloc[-1]
     # VWAP
     vwap = compute_vwap(df['High'], df['Low'], df['Close'], df['Volume']).iloc[-1]
     # Psychological levels
@@ -557,7 +557,7 @@ def calculate_support_resistance(data):
         psych_level
     ]
     # Tambahkan Fibonacci levels jika relevan
-    if not np.isnan(fib_levels['Fib_0.0']) and fib极
+    if not np.isnan(fib_levels['Fib_0.0']) and fib_levels['Fib_0.0'] > current_price:
         resistance_levels.append(fib_levels['Fib_0.0'])
     if not np.isnan(fib_levels['Fib_1.0']) and fib_levels['Fib_1.0'] < current_price:
         support_levels.append(fib_levels['Fib_1.0'])
@@ -578,7 +578,7 @@ def create_technical_chart(df, sr, is_squeeze):
     fig = go.Figure()
     # Candlestick
     fig.add_trace(go.Candlestick(
-        x极
+        x=df.index,
         open=df['Open'],
         high=df['High'],
         low=df['Low'],
@@ -589,8 +589,8 @@ def create_technical_chart(df, sr, is_squeeze):
     ))
     # Moving averages
     fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], mode='lines', name='MA20', line=dict(color='blue', width=1.5)))
-    fig.add_trace(go.Scatter(x=df.index,极
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA100'], mode='极
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], mode='lines', name='MA50', line=dict(color='orange', width=1.5)))
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA100'], mode='lines', name='MA100', line=dict(color='purple', width=1.5)))
     # Bollinger Bands
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], mode='lines', name='BB Upper',
                             line=dict(color='red', width=1, dash='dot')))
@@ -605,7 +605,7 @@ def create_technical_chart(df, sr, is_squeeze):
                       annotation_text=f"Support {i+1}: Rp {level:,.2f}",
                       annotation_position="bottom right")
     for i, level in enumerate(sr['Resistance']):
-        fig.add_hline(y=level, line_dash="dash", line极
+        fig.add_hline(y=level, line_dash="dash", line_color="red",
                       annotation_text=f"Resistance {i+1}: Rp {level:,.2f}",
                       annotation_position="top right")
     # Tambahkan indikator Squeeze jika terdeteksi
@@ -644,7 +644,7 @@ def analyze_institutional_activity(df, period=20):
     # Hitung volume anomaly
     volume_ma = df['Volume'].rolling(period).mean()
     volume_std = df['Volume'].rolling(period).std()
-    df['Volume_ZScore'] = (df['Volume'] - volume极
+    df['Volume_ZScore'] = (df['Volume'] - volume_ma) / volume_std
     
     # Deteksi volume spike (z-score > 2.5)
     volume_spikes = df['Volume_ZScore'] > 2.5
@@ -656,14 +656,14 @@ def analyze_institutional_activity(df, period=20):
     
     # Positive volume-price correlation (institutional buying)
     positive_correlation = (price_change > 0) & (volume_change > 0)
-    results['Positive_Volume_Price_Days'] = positive_correlation.iloc[-period:极
+    results['Positive_Volume_Price_Days'] = positive_correlation.iloc[-period:].sum()
     
     # Negative volume-price correlation (institutional selling)
     negative_correlation = (price_change < 0) & (volume_change > 0)
     results['Negative_Volume_Price_Days'] = negative_correlation.iloc[-period:].sum()
     
     # Volume clustering analysis (beberapa hari volume tinggi berturut-turut)
-    volume_clusters = df极
+    volume_clusters = df['Volume'] > volume_ma * 1.5
     results['Volume_Clusters'] = volume_clusters.rolling(3).sum().iloc[-5:].max()
     
     # Price resilience (harga kembali naik setelah tekanan jual)
@@ -679,7 +679,7 @@ def detect_smart_money_patterns(df, period=30):
     """
     patterns = {}
     
-    # 1. Wyckoff Spring/Up极
+    # 1. Wyckoff Spring/Upthrust
     # Spring: Price moves below support but quickly recovers
     support = df['Low'].rolling(20).mean()
     spring_pattern = (df['Low'] < support) & (df['Close'] > support)
@@ -692,7 +692,7 @@ def detect_smart_money_patterns(df, period=30):
     patterns['Stopping_Volume'] = stopping_volume.iloc[-5:].sum()
     
     # 3. Climax Action - Volume sangat tinggi dengan pergerakan harga besar
-    climax_action = (df['Volume'] > df['Volume'].rolling(20极
+    climax_action = (df['Volume'] > df['Volume'].rolling(20).mean() * 2) & \
                    ((df['High'] - df['Low']) > avg_range * 1.5)
     patterns['Climax_Action'] = climax_action.iloc[-5:].sum()
     
@@ -700,7 +700,7 @@ def detect_smart_money_patterns(df, period=30):
     # atau harga naik dengan volume rendah (distribution)
     hidden_buying = (df['Close'] < df['Open']) & (df['Volume'] < df['Volume'].rolling(20).mean() * 0.7)
     hidden_selling = (df['Close'] > df['Open']) & (df['Volume'] < df['Volume'].rolling(20).mean() * 0.7)
-    patterns['Hidden_Buying'] = hidden_buy极
+    patterns['Hidden_Buying'] = hidden_buying.iloc[-5:].sum()
     patterns['Hidden_Selling'] = hidden_selling.iloc[-5:].sum()
     
     return patterns
@@ -738,12 +738,12 @@ def calculate_volume_profile_advanced(df, period=20, bins=20):
                 value_by_price[i] += overlap * volume_per_point * (bin_low + bin_high) / 2
     
     # Hitung Point of Control (POC) - price level dengan volume tertinggi
-    poc极
+    poc_index = np.argmax(volume_by_price)
     poc_price = (bin_edges[poc_index] + bin_edges[poc_index+1]) / 2
     
     # Hitung Value Area (70% volume terpusat)
     total_volume = np.sum(volume_by_price)
-    sorted_indices = np.args极
+    sorted_indices = np.argsort(volume_by_price)[::-1]  # Urutkan dari volume tertinggi
     
     cumulative_volume = 0
     value_area_indices = []
@@ -795,11 +795,10 @@ def generate_bandarmology_report(df, period=30):
     
     # Trend analysis dengan volume konfirmasi
     price_trend = df['Close'].iloc[-1] / df['Close'].iloc[-period] - 1
-    volume_t极
     volume_trend = df['Volume'].iloc[-period:].mean() / df['Volume'].iloc[-2*period:-period].mean() - 1
     
     if price_trend > 0.05 and volume_trend > 0.1:
-        report['tre极
+        report['trend_assessment'] = "Uptrend kuat dengan konfirmasi volume"
     elif price_trend > 0.05 and volume_trend < -0.1:
         report['trend_assessment'] = "Uptrend lemah, kurang volume konfirmasi"
     elif price_trend < -0.05 and volume_trend > 0.1:
@@ -810,16 +809,14 @@ def generate_bandarmology_report(df, period=30):
         report['trend_assessment'] = "Sideways atau trend tidak jelas"
     
     # Kesimpulan bandarmology
-    # Perbaikan: kirimkan df sebagai parameter tambahan
-    conclusion = generate_bandarmology_conclusion(report, df)
+    conclusion = generate_bandarmology_conclusion(report, df['Close'].iloc[-1])
     report['conclusion'] = conclusion
     
     return report, df_with_indicators
 
-def generate_bandarmology_conclusion(report, df):
+def generate_bandarmology_conclusion(report, current_price):
     """
     Menghasilkan kesimpulan bandarmology berdasarkan analisis
-    Perbaikan: tambahkan parameter df
     """
     institutional = report['institutional_activity']
     patterns = report['smart_money_patterns']
@@ -834,7 +831,7 @@ def generate_bandarmology_conclusion(report, df):
     # Analisis institutional buying/selling
     if institutional['Positive_Volume_Price_Days'] > institutional['Negative_Volume_Price_Days'] * 1.5:
         conclusion.append("📈 **Dominasi buying pressure** - Lebih banyak hari dengan harga naik dan volume tinggi")
-    elif institutional['Negative_Volume_Price_Days'] > institutional['Positive极
+    elif institutional['Negative_Volume_Price_Days'] > institutional['Positive_Volume_Price_Days'] * 1.5:
         conclusion.append("📉 **Dominasi selling pressure** - Lebih banyak hari dengan harga turun dan volume tinggi")
     
     # Analisis pola smart money
@@ -844,11 +841,10 @@ def generate_bandarmology_conclusion(report, df):
     if patterns['Stopping_Volume'] > 0:
         conclusion.append("⏹️ **Stopping Volume terdeteksi** - Kemungkinan institusi menahan pergerakan harga")
     
-    if patterns['Climax_Action'] > 极
+    if patterns['Climax_Action'] > 0:
         conclusion.append("🎯 **Climax Action terdeteksi** - Kemungkinan exhaustion move")
     
     # Analisis volume profile
-    current_price = df['Close'].iloc[-1]  # Sekarang df tersedia
     if current_price > volume_profile['value_area_high']:
         conclusion.append("🚀 **Harga di atas Value Area** - Kondisi bullish dengan ruang untuk lanjut")
     elif current_price < volume_profile['value_area_low']:
@@ -901,10 +897,10 @@ def app():
             df['RSI'] = compute_rsi(df['Close'])
             df['MACD'], df['Signal'], df['Hist'] = compute_macd(df['Close'])
             df['BB_Upper'], df['BB_Middle'], df['BB_Lower'], df['BB_Bandwidth'], df['BB_%B'] = compute_bollinger_bands(df['Close'])
-            df['AT极
+            df['ATR'] = compute_atr(df['High'], df['Low'], df['Close'])
             df['OBV'] = compute_obv(df['Close'], df['Volume'])
             df['ADX'], df['Plus_DI'], df['Minus_DI'] = compute_adx(df['High'], df['Low'], df['Close'])
-            df['VWAP'] = compute_vwap(df['High'], df['Low'], df极
+            df['VWAP'] = compute_vwap(df['High'], df['Low'], df['Close'], df['Volume'])
             df['MFI'] = compute_mfi_corrected(df)
             # Hitung volume moving average
             df['Volume_MA20'] = df['Volume'].rolling(20).mean()
@@ -923,10 +919,9 @@ def app():
             # Hitung skor untuk setiap indikator
             scores = {}
             # RSI
-            scores['r极
             scores['rsi'] = scoring_system.score_rsi(df['RSI'])
             # MACD
-            macd_cross_score, macd_cross_strength, macd_hist_score, macd极
+            macd_cross_score, macd_cross_strength, macd_hist_score, macd_hist_strength = scoring_system.score_macd(
                 df['MACD'], df['Signal'], df['Hist'])
             scores['macd_cross'] = (macd_cross_score, macd_cross_strength)
             scores['macd_hist'] = (macd_hist_score, macd_hist_strength)
@@ -960,7 +955,7 @@ def app():
 
             # Deteksi akumulasi/distribusi
             accumulation_status, acc_score, dist_score = detect_accumulation_distribution(df)
-            volume_profile, bin_edges, price_zone_low, price_zone_high = calculate_volume_profile(df)
+            volume_profile_simple, bin_edges_simple, price_zone_low, price_zone_high = calculate_volume_profile(df)
 
             # --- TAMBAHAN: Tampilkan Tabel Support, Resistance, dan Fibonacci ---
             # Tabel Support dan Resistance
@@ -968,7 +963,7 @@ def app():
             sr_data = []
             for i, level in enumerate(sr['Support']):
                 sr_data.append({"Level": f"Support {i+1}", "Harga": f"Rp {level:,.2f}"})
-            for i, level in enumerate(sr['极
+            for i, level in enumerate(sr['Resistance']):
                 sr_data.append({"Level": f"Resistance {i+1}", "Harga": f"Rp {level:,.2f}"})
 
             if sr_data:  # Periksa apakah ada data
@@ -998,16 +993,16 @@ def app():
                 title = {'text': "Composite Score", 'font': {'size': 24}},
                 delta = {'reference': 0},
                 gauge = {
-                    'axis': {'range': [-1, 1], 'tickwidth': 1, '极
+                    'axis': {'range': [-1, 1], 'tickwidth': 1, 'tickcolor': "darkblue"},
                     'bar': {'color': "darkblue"},
-                    'bg极
+                    'bgcolor': "white",
                     'borderwidth': 2,
                     'bordercolor': "gray",
                     'steps': [
                         {'range': [-1, -0.5], 'color': 'red'},
                         {'range': [-0.5, 0], 'color': 'lightcoral'},
-                        {'range': [0极
-                        {'range': [0.5, 1], '极
+                        {'range': [0, 0.5], 'color': 'lightgreen'},
+                        {'range': [0.5, 1], 'color': 'green'}],
                     'threshold': {
                         'line': {'color': "red", 'width': 4},
                         'thickness': 0.75,
@@ -1017,7 +1012,7 @@ def app():
 
             # Tampilkan interpretasi composite score
             st.info(f"**Interpretasi Composite Score:** {interpretation}")
-            st.write(f极
+            st.write(f"**Tingkat Keyakinan:** {confidence}")
 
             # --- TAMBAHAN: Tampilkan Data Volume dan Perubahan Harga ---
             st.subheader("📊 Data Volume dan Perubahan Harga Terkini")
@@ -1043,7 +1038,7 @@ def app():
                 if price_change_pct < 0:
                     st.markdown(f"<span style='color:red; font-size:14px;'>↓ {price_change_pct:.2f}% ({price_change_abs:.2f})</span>", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"极
+                    st.markdown(f"<span style='color:green; font-size:14px;'>↑ {price_change_pct:.2f}% (+{price_change_abs:.2f})</span>", unsafe_allow_html=True)
             with vol_cols[1]:
                 st.write("**Volume Saham (Lot)**")
                 st.write(f"{latest_volume:,} lot")
@@ -1052,7 +1047,7 @@ def app():
                 st.write(f"Rp {transaction_value:,.0f}")
             with vol_cols[3]:
                 st.write("**Rata-rata Volume 5 Hari**")
-                st.write(f"{avg极
+                st.write(f"{avg_volume_5d:,.0f} lot")
             # --- AKHIR TAMBAHAN ---
 
             # Tampilkan detail skor indikator
@@ -1069,8 +1064,8 @@ def app():
                          f"{'Bullish' if scores['bollinger'][0] > 0 else 'Bearish' if scores['bollinger'][0] < 0 else 'Netral'}",
                          delta=f"Skor: {scores['bollinger'][0]:.2f} (Kekuatan: {scores['bollinger'][1]:.2f})")
                 st.metric("Volume",
-                         f"{'Bullish极
-                         delta=f"Skor: {scores['volume'][0]:.2f} (Kekuatan: {scores['volume'][极
+                         f"{'Bullish' if scores['volume'][0] > 0 else 'Bearish' if scores['volume'][0] < 0 else 'Netral'}",
+                         delta=f"Skor: {scores['volume'][0]:.2f} (Kekuatan: {scores['volume'][1]:.2f})")
             with indicator_cols[2]:
                 st.metric("OBV",
                          f"{'Bullish' if scores['obv'][0] > 0 else 'Bearish' if scores['obv'][0] < 0 else 'Netral'}",
@@ -1087,13 +1082,13 @@ def app():
             with col1:
                 st.write("**Aktivitas Institusional**")
                 st.write(f"- Volume Spikes (5 hari terakhir): {bandarmology_report['institutional_activity']['Volume_Spikes_Last_5_Days']}")
-                st.write(f"- Hari Buying Pressure: {bandarmology_report['institutional_activity']['Positive_Volume极
+                st.write(f"- Hari Buying Pressure: {bandarmology_report['institutional_activity']['Positive_Volume_Price_Days']}")
                 st.write(f"- Hari Selling Pressure: {bandarmology_report['institutional_activity']['Negative_Volume_Price_Days']}")
                 st.write(f"- Volume Clusters: {bandarmology_report['institutional_activity']['Volume_Clusters']}")
-                st.write(f"- Resilience Days: {bandarmology_report['institutional_activity']['Resil极
+                st.write(f"- Resilience Days: {bandarmology_report['institutional_activity']['Resilience_Days']}")
 
             with col2:
-                st.write极
+                st.write("**Pola Smart Money**")
                 st.write(f"- Spring Pattern: {bandarmology_report['smart_money_patterns']['Spring_Pattern']}")
                 st.write(f"- Stopping Volume: {bandarmology_report['smart_money_patterns']['Stopping_Volume']}")
                 st.write(f"- Climax Action: {bandarmology_report['smart_money_patterns']['Climax_Action']}")
@@ -1102,7 +1097,7 @@ def app():
 
             st.write("**Analisis Volume Profile**")
             st.write(f"- Volume Delta: {bandarmology_report['volume_profile_analysis']['volume_delta']:,.0f}")
-            st.write(f"- Point of Control: Rp {bandarmology_report['volume_profile_analysis']['poc_price']:,.2f}")
+            st.write(f"- Point of Control (Harga yang paling banyak diperdagangkan): Rp {bandarmology_report['volume_profile_analysis']['poc_price']:,.2f}")
             st.write(f"- Value Area: Rp {bandarmology_report['volume_profile_analysis']['value_area_low']:,.2f} - Rp {bandarmology_report['volume_profile_analysis']['value_area_high']:,.2f}")
             st.write(f"- Trend Assessment: {bandarmology_report['trend_assessment']}")
 
@@ -1115,7 +1110,7 @@ def app():
             st.subheader("📊 Volume dengan Volume Spikes")
             fig_volume = go.Figure()
             fig_volume.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color='rgba(100, 100, 100, 0.3)'))
-            fig_volume.add_trace(go.Scatter(x极
+            fig_volume.add_trace(go.Scatter(x=df.index, y=df['Volume'].rolling(20).mean(), name='Volume MA20', line=dict(color='blue')))
 
             # Tandai volume spikes
             spike_indices = df_with_bandar_indicators[df_with_bandar_indicators['Volume_ZScore'] > 2.5].index
@@ -1124,7 +1119,7 @@ def app():
                                            name='Volume Spike', marker=dict(color='red', size=8)))
 
             fig_volume.update_layout(height=300)
-            st.plotly极
+            st.plotly_chart(fig_volume, use_container_width=True)
 
             # Chart volume profile
             st.subheader("📊 Volume Profile (20 Hari Terakhir)")
@@ -1162,7 +1157,7 @@ def app():
                     st.metric("Jenis Sinyal", trading_plan["type"])
                     st.metric("Harga Entry", f"Rp {trading_plan['entry']:,.2f}")
                     st.metric("Stop Loss", f"Rp {trading_plan['stop_loss']:,.2f}")
-                with plan_cols[极
+                with plan_cols[1]:
                     st.metric("Target 1", f"Rp {trading_plan['target_1']:,.2f}")
                     st.metric("Target 2", f"Rp {trading_plan['target_2']:,.2f}")
                     st.metric("Risk/Reward", trading_plan["risk_reward"])
@@ -1178,7 +1173,7 @@ def app():
                 # Tampilkan kondisi saat ini dan level untuk monitor
                 st.warning("⚠️ **Belum Terdeteksi Breakout yang Kuat**")
                 if sr['Resistance']:
-                    st.write(f"**Resistance Terdekat:** Rp {sr['Resistance'][0]:,.极
+                    st.write(f"**Resistance Terdekat:** Rp {sr['Resistance'][0]:,.2f}")
                     st.write(f"**Syarat Breakout Bullish:** Close > Rp {sr['Resistance'][0] * (1 + buffer):,.2f} dengan volume > 1.5x rata-rata")
                 if sr['Support']:
                     st.write(f"**Support Terdekat:** Rp {sr['Support'][0]:,.2f}")
@@ -1187,7 +1182,6 @@ def app():
             # Tampilkan chart teknikal lengkap
             st.subheader("📈 Chart Teknikal Lengkap")
             # Buat chart dengan Plotly
-            fig极
             fig = create_technical_chart(df, sr, is_squeeze)
             st.plotly_chart(fig, use_container_width=True)
 
