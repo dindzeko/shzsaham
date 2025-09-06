@@ -716,6 +716,7 @@ def create_technical_chart(df, sr, is_squeeze):
     return fig
 
 # --- FUNGSI UTAMA APLIKASI STREAMLIT ---
+def app():
     st.title("📈 Analisa Teknikal Saham dengan Cross-Confirmation")
     
     # Input parameter
