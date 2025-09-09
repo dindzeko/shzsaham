@@ -471,7 +471,7 @@ def create_volume_chart(df):
 # =========================
 # Fungsi Utama
 # =========================
-def main():
+def app():
     st.title("📊 Analisa Teknikal Saham")
     
     # Input parameter di bagian atas
