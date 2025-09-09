@@ -4,13 +4,14 @@ import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
+from scipy.signal import argrelextrema
 import io
 
 # --- FUNGSI DETEKSI POLA ---
 def detect_pattern(data):
     if len(data) < 4:
         return False
-
+        
     recent = data.tail(4)
     c1, c2, c3, c4 = recent.iloc[0], recent.iloc[1], recent.iloc[2], recent.iloc[3]
 
@@ -21,12 +22,19 @@ def detect_pattern(data):
     is_uptrend = data['Close'].iloc[-20:].mean() > data['Close'].iloc[-50:-20].mean() if len(data) >= 50 else False
     is_close_sequence = c2['Close'] > c3['Close'] > c4['Close']
 
-    return all([is_c1_bullish, is_c2_bearish, is_c3_bearish, is_c4_bearish, is_uptrend, is_close_sequence])
+    return all([
+        is_c1_bullish,
+        is_c2_bearish,
+        is_c3_bearish,
+        is_c4_bearish,
+        is_uptrend,
+        is_close_sequence
+    ])
 
 def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
-        start_date = end_date - timedelta(days=120)
+        start_date = end_date - timedelta(days=90)
         data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
         return data if not data.empty else None
     except Exception as e:
@@ -43,6 +51,8 @@ def load_google_drive_excel(file_url):
             st.error("Kolom 'Ticker' dan 'Papan Pencatatan' harus ada di file Excel.")
             return None
 
+        st.success("✅ Berhasil memuat data dari Google Drive!")
+        st.info(f"Jumlah baris: {len(df)}")
         return df
 
     except Exception as e:
@@ -53,12 +63,14 @@ def load_google_drive_excel(file_url):
 def app():
     st.title("🔪 Pisau Jatuh Screener")
 
+    # Inisialisasi session state
     if 'screening_results' not in st.session_state:
         st.session_state.screening_results = None
 
     file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
     df = load_google_drive_excel(file_url)
-    if df is None:
+
+    if df is None or 'Ticker' not in df.columns:
         return
 
     tickers = df['Ticker'].dropna().unique().tolist()
@@ -67,72 +79,84 @@ def app():
     if st.button("🔍 Mulai Screening"):
         results = []
         progress_bar = st.progress(0)
+        progress_text = st.empty()
 
         for i, ticker in enumerate(tickers):
             data = get_stock_data(ticker, analysis_date)
 
             if data is not None and len(data) >= 50:
+                # Hitung MA untuk harga
+                data['MA5'] = data['Close'].rolling(window=5).mean()
+                data['MA20'] = data['Close'].rolling(window=20).mean()
+                
+                # Hitung MA untuk volume
+                data['Volume_MA5'] = data['Volume'].rolling(window=5).mean()
+                data['Volume_MA20'] = data['Volume'].rolling(window=20).mean()
+                
                 if detect_pattern(data):
                     papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
-
-                    # --- HITUNG NILAI TAMBAHAN ---
-                    close_last = data['Close'].iloc[-1]
-                    close_analisa = data[data.index <= pd.to_datetime(analysis_date)]['Close']
-                    close_analisa = close_analisa.iloc[-1] if not close_analisa.empty else np.nan
-
-                    close_ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
-                    close_ma20 = data['Close'].rolling(window=20).mean().iloc[-1]
-
-                    vol_lot = data['Volume'].iloc[-1] / 100
-                    vol_rp = close_last * data['Volume'].iloc[-1]
-
-                    vol_lot_ma5 = (data['Volume'].rolling(window=5).mean().iloc[-1]) / 100
-                    vol_lot_ma20 = (data['Volume'].rolling(window=20).mean().iloc[-1]) / 100
-
-                    vol_rp_ma5 = (data['Volume'].rolling(window=5).mean().iloc[-1]) * close_last
-                    vol_rp_ma20 = (data['Volume'].rolling(window=20).mean().iloc[-1]) * close_last
-
+                    
+                    # Dapatkan data terbaru
+                    latest = data.iloc[-1]
+                    
+                    # Dapatkan data pada tanggal analisa
+                    analysis_data = data[data.index.date == analysis_date]
+                    if len(analysis_data) > 0:
+                        close_analisa = analysis_data['Close'].iloc[0]
+                    else:
+                        # Jika tidak ada data pada tanggal analisa, gunakan data terakhir
+                        close_analisa = latest['Close']
+                    
+                    # Hitung Volume Lot (1 lot = 100 saham)
+                    volume_lot = latest['Volume'] / 100
+                    volume_rp = latest['Volume'] * latest['Close']
+                    
                     results.append({
                         "Ticker": ticker,
                         "Papan": papan,
-                        "Close Analisa": close_analisa,
-                        "Close Last": close_last,
-                        "Close MA 5": close_ma5,
-                        "Close MA 20": close_ma20,
-                        "Volume Lot": vol_lot,
-                        "Volume Rp": vol_rp,
-                        "Volume Lot MA 5": vol_lot_ma5,
-                        "Volume Lot MA 20": vol_lot_ma20,
-                        "Volume Rp MA 5": vol_rp_ma5,
-                        "Volume Rp MA 20": vol_rp_ma20
+                        "Close Analisa": round(close_analisa, 2),
+                        "Close Last": round(latest['Close'], 2),
+                        "MA5": round(latest['MA5'], 2) if not pd.isna(latest['MA5']) else 0,
+                        "MA20": round(latest['MA20'], 2) if not pd.isna(latest['MA20']) else 0,
+                        "Volume Lot": int(volume_lot),
+                        "Volume Rp (M)": round(volume_rp / 1000000, 2),  # Dalam juta
+                        "Vol MA5": int(latest['Volume_MA5'] / 100) if not pd.isna(latest['Volume_MA5']) else 0,
+                        "Vol MA20": int(latest['Volume_MA20'] / 100) if not pd.isna(latest['Volume_MA20']) else 0
                     })
 
             progress = (i + 1) / len(tickers)
             progress_bar.progress(progress)
+            progress_text.text(f"Progress: {int(progress * 100)}% - Memproses {ticker}")
 
         if results:
-            df_results = pd.DataFrame(results)
-
-            # Highlight gradasi
-            def color_gradient(val, cmap="Greens"):
-                return f"background-color: rgba(0, 100, 0, {min(1, max(0, (val - np.nanmin(df_results.select_dtypes(float).values)) / (np.nanmax(df_results.select_dtypes(float).values) - np.nanmin(df_results.select_dtypes(float).values) + 1e-9)))})"
-
-            st.session_state.screening_results = df_results.style.background_gradient(cmap="YlGn")
-
+            st.session_state.screening_results = pd.DataFrame(results)
         else:
             st.warning("Tidak ada saham yang cocok dengan pola.")
 
-    # --- HASIL ---
+    # Tampilkan hasil
     if st.session_state.screening_results is not None:
         st.subheader("✅ Saham yang Memenuhi Pola Pisau Jatuh")
-        st.dataframe(st.session_state.screening_results, use_container_width=True)
+        
+        # Format tampilan angka
+        display_df = st.session_state.screening_results.copy()
+        display_df['Volume Lot'] = display_df['Volume Lot'].apply(lambda x: f"{x:,}")
+        display_df['Vol MA5'] = display_df['Vol MA5'].apply(lambda x: f"{x:,}")
+        display_df['Vol MA20'] = display_df['Vol MA20'].apply(lambda x: f"{x:,}")
+        display_df['Volume Rp (M)'] = display_df['Volume Rp (M)'].apply(lambda x: f"Rp {x:,.2f}")
+        
+        # Terapkan gradasi warna pada kolom numerik
+        styled_df = display_df.style.background_gradient(
+            subset=['Close Analisa', 'Close Last', 'MA5', 'MA20', 'Volume Lot', 'Volume Rp (M)', 'Vol MA5', 'Vol MA20'],
+            cmap='YlOrRd'
+        )
+        
+        st.dataframe(styled_df)
 
-        # Simpan ke Excel
+        # --- DOWNLOAD HASIL KE EXCEL ---
         output = io.BytesIO()
-        df_export = st.session_state.screening_results.data if hasattr(st.session_state.screening_results, "data") else st.session_state.screening_results
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_export.to_excel(writer, sheet_name='Hasil Screening', index=False)
-
+            st.session_state.screening_results.to_excel(writer, sheet_name='Hasil Screening', index=False)
+        
         st.download_button(
             label="📥 Unduh Hasil Screening (Excel)",
             data=output.getvalue(),
