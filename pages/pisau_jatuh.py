@@ -10,7 +10,7 @@ import io
 def detect_pattern(data):
     if len(data) < 4:
         return False
-        
+
     recent = data.tail(4)
     c1, c2, c3, c4 = recent.iloc[0], recent.iloc[1], recent.iloc[2], recent.iloc[3]
 
@@ -21,61 +21,18 @@ def detect_pattern(data):
     is_uptrend = data['Close'].iloc[-20:].mean() > data['Close'].iloc[-50:-20].mean() if len(data) >= 50 else False
     is_close_sequence = c2['Close'] > c3['Close'] > c4['Close']
 
-    return all([
-        is_c1_bullish,
-        is_c2_bearish,
-        is_c3_bearish,
-        is_c4_bearish,
-        is_uptrend,
-        is_close_sequence
-    ])
+    return all([is_c1_bullish, is_c2_bearish, is_c3_bearish, is_c4_bearish, is_uptrend, is_close_sequence])
 
-# --- AMBIL DATA SAHAM ---
 def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
         start_date = end_date - timedelta(days=120)
-        data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=datetime.today().strftime('%Y-%m-%d'))
-
-        if data.empty:
-            return None
-
-        # Close Analisa = harga close pada tanggal analisa (atau terakhir sebelum tanggal itu)
-        close_analisa = data.loc[:end_date.strftime("%Y-%m-%d")]['Close']
-        close_analisa = close_analisa.iloc[-1] if not close_analisa.empty else np.nan
-
-        # Close Last = perdagangan terakhir
-        close_last = data['Close'].iloc[-1]
-
-        # Hitung MA harga
-        data['MA5'] = data['Close'].rolling(5).mean()
-        data['MA20'] = data['Close'].rolling(20).mean()
-
-        # Hitung volume lot & Rp
-        data['VolumeLot'] = data['Volume'] / 100
-        data['VolumeRp'] = data['Close'] * data['Volume']
-        data['VolLot_MA5'] = data['VolumeLot'].rolling(5).mean()
-        data['VolLot_MA20'] = data['VolumeLot'].rolling(20).mean()
-        data['VolRp_MA5'] = data['VolumeRp'].rolling(5).mean()
-        data['VolRp_MA20'] = data['VolumeRp'].rolling(20).mean()
-
-        return {
-            "Close Analisa": round(close_analisa, 2),
-            "Close Last": round(close_last, 2),
-            "Close MA 5": round(data['MA5'].iloc[-1], 2),
-            "Close MA 20": round(data['MA20'].iloc[-1], 2),
-            "Volume Lot": int(data['VolumeLot'].iloc[-1]),
-            "Volume Lot MA 5": int(data['VolLot_MA5'].iloc[-1]),
-            "Volume Lot MA 20": int(data['VolLot_MA20'].iloc[-1]),
-            "Volume Rp": int(data['VolumeRp'].iloc[-1]),
-            "Volume Rp MA 5": int(data['VolRp_MA5'].iloc[-1]),
-            "Volume Rp MA 20": int(data['VolRp_MA20'].iloc[-1]),
-        }
+        data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+        return data if not data.empty else None
     except Exception as e:
-        st.error(f"Gagal mengambil data {ticker}: {e}")
+        st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
 
-# --- LOAD DATA TICKER DARI GOOGLE DRIVE ---
 def load_google_drive_excel(file_url):
     try:
         file_id = file_url.split("/d/")[1].split("/")[0]
@@ -87,11 +44,12 @@ def load_google_drive_excel(file_url):
             return None
 
         return df
+
     except Exception as e:
         st.error(f"Gagal membaca file: {e}")
         return None
 
-# --- APP ---
+# --- FUNGSI UTAMA APP ---
 def app():
     st.title("🔪 Pisau Jatuh Screener")
 
@@ -100,54 +58,84 @@ def app():
 
     file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
     df = load_google_drive_excel(file_url)
-
     if df is None:
         return
 
     tickers = df['Ticker'].dropna().unique().tolist()
-    analysis_date = st.date_input("📅 Tanggal Analisa", value=datetime.today())
+    analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
 
     if st.button("🔍 Mulai Screening"):
         results = []
-        progress = st.progress(0)
+        progress_bar = st.progress(0)
 
         for i, ticker in enumerate(tickers):
             data = get_stock_data(ticker, analysis_date)
-            if data:
-                papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
-                row = {"Ticker": ticker, "Papan": papan}
-                row.update(data)
-                results.append(row)
 
-            progress.progress((i+1) / len(tickers))
+            if data is not None and len(data) >= 50:
+                if detect_pattern(data):
+                    papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
+
+                    # --- HITUNG NILAI TAMBAHAN ---
+                    close_last = data['Close'].iloc[-1]
+                    close_analisa = data[data.index <= pd.to_datetime(analysis_date)]['Close']
+                    close_analisa = close_analisa.iloc[-1] if not close_analisa.empty else np.nan
+
+                    close_ma5 = data['Close'].rolling(window=5).mean().iloc[-1]
+                    close_ma20 = data['Close'].rolling(window=20).mean().iloc[-1]
+
+                    vol_lot = data['Volume'].iloc[-1] / 100
+                    vol_rp = close_last * data['Volume'].iloc[-1]
+
+                    vol_lot_ma5 = (data['Volume'].rolling(window=5).mean().iloc[-1]) / 100
+                    vol_lot_ma20 = (data['Volume'].rolling(window=20).mean().iloc[-1]) / 100
+
+                    vol_rp_ma5 = (data['Volume'].rolling(window=5).mean().iloc[-1]) * close_last
+                    vol_rp_ma20 = (data['Volume'].rolling(window=20).mean().iloc[-1]) * close_last
+
+                    results.append({
+                        "Ticker": ticker,
+                        "Papan": papan,
+                        "Close Analisa": close_analisa,
+                        "Close Last": close_last,
+                        "Close MA 5": close_ma5,
+                        "Close MA 20": close_ma20,
+                        "Volume Lot": vol_lot,
+                        "Volume Rp": vol_rp,
+                        "Volume Lot MA 5": vol_lot_ma5,
+                        "Volume Lot MA 20": vol_lot_ma20,
+                        "Volume Rp MA 5": vol_rp_ma5,
+                        "Volume Rp MA 20": vol_rp_ma20
+                    })
+
+            progress = (i + 1) / len(tickers)
+            progress_bar.progress(progress)
 
         if results:
-            st.session_state.screening_results = pd.DataFrame(results)
-        else:
-            st.warning("Tidak ada data yang ditemukan.")
+            df_results = pd.DataFrame(results)
 
+            # Highlight gradasi
+            def color_gradient(val, cmap="Greens"):
+                return f"background-color: rgba(0, 100, 0, {min(1, max(0, (val - np.nanmin(df_results.select_dtypes(float).values)) / (np.nanmax(df_results.select_dtypes(float).values) - np.nanmin(df_results.select_dtypes(float).values) + 1e-9)))})"
+
+            st.session_state.screening_results = df_results.style.background_gradient(cmap="YlGn")
+
+        else:
+            st.warning("Tidak ada saham yang cocok dengan pola.")
+
+    # --- HASIL ---
     if st.session_state.screening_results is not None:
         st.subheader("✅ Saham yang Memenuhi Pola Pisau Jatuh")
-        df = st.session_state.screening_results
+        st.dataframe(st.session_state.screening_results, use_container_width=True)
 
-        st.dataframe(
-            df.style.background_gradient(
-                cmap="YlGn",
-                subset=[
-                    "Close Analisa","Close Last","Close MA 5","Close MA 20",
-                    "Volume Lot","Volume Lot MA 5","Volume Lot MA 20",
-                    "Volume Rp","Volume Rp MA 5","Volume Rp MA 20"
-                ]
-            ).format("{:,.0f}")
-        )
-
-        # Download Excel
+        # Simpan ke Excel
         output = io.BytesIO()
+        df_export = st.session_state.screening_results.data if hasattr(st.session_state.screening_results, "data") else st.session_state.screening_results
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Hasil Screening', index=False)
+            df_export.to_excel(writer, sheet_name='Hasil Screening', index=False)
+
         st.download_button(
-            "📥 Unduh Excel",
-            output.getvalue(),
+            label="📥 Unduh Hasil Screening (Excel)",
+            data=output.getvalue(),
             file_name=f"pisau_jatuh_{datetime.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
