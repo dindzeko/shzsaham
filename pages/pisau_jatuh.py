@@ -7,7 +7,7 @@ import numpy as np
 from scipy.signal import argrelextrema
 import io
 
-# --- FUNGSI DETEKSI POLA (TIDAK BERUBAH) ---
+# --- FUNGSI DETEKSI POLA (TIDAK BERUBAH SAMA SEKALI) ---
 def detect_pattern(data):
     if len(data) < 4:
         return False
@@ -61,20 +61,42 @@ def load_google_drive_excel(file_url):
         st.error(f"Gagal membaca file: {e}")
         return None
 
-# --- FUNGSI UNTUK ANALISIS TAMBAHAN SETELAH SCREENING ---
+# --- FUNGSI UNTUK ANALISIS TAMBAHAN SETELAH SCREENING (DENGAN VALIDASI KETAT) ---
 def analyze_results(screening_results, analysis_date):
     enhanced_results = []
 
     for _, row in screening_results.iterrows():
         ticker = row['Ticker']
-        data = get_stock_data(ticker, analysis_date)
+        try:
+            # Ambil data dari 90 hari ke belakang hingga hari ini
+            stock = yf.Ticker(f"{ticker}.JK")
+            end_date = datetime.today().date()
+            start_date = end_date - timedelta(days=90)
+            data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'))
 
-        if data is not None and len(data) >= 20:
+            if data.empty or len(data) < 20:
+                continue
+
+            # ✅ Harga Terakhir = harga closing terbaru (hari perdagangan terakhir)
             last_close = data['Close'].iloc[-1]
-            analysis_close = data['Close'].iloc[-2] if len(data) > 1 else last_close
 
-            volume_lot = data['Volume'].iloc[-1] // 100
-            volume_rp = last_close * data['Volume'].iloc[-1]
+            # ✅ Harga Analisa = harga closing 1 hari perdagangan sebelum tanggal analisis
+            target_date = analysis_date - timedelta(days=1)
+            
+            # Cari data perdagangan terakhir sebelum target_date
+            trading_days_before = data[data.index <= pd.Timestamp(target_date)]
+            
+            if trading_days_before.empty:
+                st.warning(f"⚠️ Tidak ada data untuk {ticker} sebelum tanggal {target_date}")
+                continue
+                
+            # Ambil harga closing dari hari perdagangan terakhir sebelum target_date
+            analysis_close = trading_days_before['Close'].iloc[-1]
+
+            # ✅ Hitung volume dan MA
+            latest_volume = data['Volume'].iloc[-1]
+            volume_lot = latest_volume // 100
+            volume_rp = last_close * latest_volume
 
             ma5 = data['Close'].tail(5).mean()
             ma20 = data['Close'].tail(20).mean()
@@ -89,6 +111,9 @@ def analyze_results(screening_results, analysis_date):
                 "MA 5": round(ma5, 2),
                 "MA 20": round(ma20, 2)
             })
+
+        except Exception as e:
+            st.error(f"⚠️ Gagal menganalisis {ticker}: {str(e)}")
 
     return pd.DataFrame(enhanced_results)
 
@@ -130,7 +155,7 @@ def app():
             progress_text.text(f"Progress: {int(progress * 100)}% - Memproses {ticker}")
 
         if results:
-            # Tahap 2: Analisis tambahan
+            # Tahap 2: Analisis tambahan dengan validasi ketat
             temp_df = pd.DataFrame(results)
             final_df = analyze_results(temp_df, analysis_date)
             st.session_state.screening_results = final_df
