@@ -13,15 +13,11 @@ def detect_pattern(data):
     recent = data.tail(4)
     c1, c2, c3, c4 = recent.iloc[0], recent.iloc[1], recent.iloc[2], recent.iloc[3]
 
-    # C1 bullish kuat
     is_c1_bullish = c1['Close'] > c1['Open'] and (c1['Close'] - c1['Open']) > 0.015 * c1['Open']
-    # C2 sampai C4 bearish
     is_c2_bearish = c2['Close'] < c2['Open'] and c2['Close'] < c1['Close']
     is_c3_bearish = c3['Close'] < c3['Open']
     is_c4_bearish = c4['Close'] < c4['Open']
-    # Trend naik → MA20 terakhir lebih tinggi dari MA20 sebelumnya
     is_uptrend = data['Close'].iloc[-20:].mean() > data['Close'].iloc[-50:-20].mean() if len(data) >= 50 else False
-    # Close menurun berurutan
     is_close_sequence = c2['Close'] > c3['Close'] > c4['Close']
 
     return all([
@@ -39,12 +35,11 @@ def get_stock_data(ticker, analysis_date):
         stock = yf.Ticker(f"{ticker}.JK")
         start_date = analysis_date - timedelta(days=90)
 
-        # end=analysis_date + 1 supaya candle di hari analysis_date ikut masuk
+        # Ambil sampai hari ini (supaya dapat harga terbaru)
         data = stock.history(
             start=start_date.strftime('%Y-%m-%d'),
-            end=(analysis_date + timedelta(days=1)).strftime('%Y-%m-%d')
+            end=(datetime.today() + timedelta(days=1)).strftime('%Y-%m-%d')
         )
-
         return data if not data.empty else None
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
@@ -61,10 +56,7 @@ def load_google_drive_excel(file_url):
             st.error("Kolom 'Ticker' dan 'Papan Pencatatan' harus ada di file Excel.")
             return None
 
-        st.success("✅ Berhasil memuat data dari Google Drive!")
-        st.info(f"Jumlah baris: {len(df)}")
         return df
-
     except Exception as e:
         st.error(f"Gagal membaca file: {e}")
         return None
@@ -76,15 +68,12 @@ def app():
     if 'screening_results' not in st.session_state:
         st.session_state.screening_results = None
 
-    # File master daftar saham
     file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
     df = load_google_drive_excel(file_url)
     if df is None:
         return
 
     tickers = df['Ticker'].dropna().unique().tolist()
-
-    # Input tanggal analisis
     analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
 
     if st.button("🔍 Mulai Screening"):
@@ -99,13 +88,23 @@ def app():
                 if detect_pattern(data):
                     papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
 
-                    results.append({
-                        "Ticker": ticker,
-                        "Papan": papan,
-                        "Harga Terakhir": round(data['Close'].iloc[-1], 2),
-                        "Harga Analisa": round(data['Close'].iloc[-1], 2),
-                        "Volume": int(data['Volume'].iloc[-1])
-                    })
+                    # Harga Analisa = close terakhir sebelum/tanggal analisa
+                    harga_analisa = data.loc[:str(analysis_date)].iloc[-1]['Close'] if not data.loc[:str(analysis_date)].empty else None
+                    # Harga Terakhir = close paling baru dari yfinance
+                    harga_terakhir = data['Close'].iloc[-1]
+
+                    if harga_analisa is not None:
+                        volume = int(data['Volume'].iloc[-1])
+                        results.append({
+                            "Ticker": ticker,
+                            "Papan": papan,
+                            "Harga Terakhir": round(harga_terakhir, 2),
+                            "Harga Analisa": round(harga_analisa, 2),
+                            "Volume Rp": int(harga_terakhir * volume),
+                            "Volume Lot": int(volume / 100),
+                            "MA 5 Close": round(data['Close'].tail(5).mean(), 2),
+                            "MA 20 Close": round(data['Close'].tail(20).mean(), 2)
+                        })
 
             progress = (i + 1) / len(tickers)
             progress_bar.progress(progress)
@@ -116,12 +115,10 @@ def app():
         else:
             st.warning("Tidak ada saham yang cocok dengan pola.")
 
-    # --- TAMPILKAN HASIL ---
     if st.session_state.screening_results is not None:
         st.subheader("✅ Saham yang Memenuhi Pola Pisau Jatuh")
         st.dataframe(st.session_state.screening_results)
 
-        # --- DOWNLOAD KE EXCEL ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             st.session_state.screening_results.to_excel(writer, sheet_name='Hasil Screening', index=False)
@@ -133,6 +130,5 @@ def app():
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# --- PANGGIL APP ---
 if __name__ == "__main__":
     app()
