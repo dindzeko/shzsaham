@@ -1,4 +1,3 @@
-# pages/pisau_jatuh.py
 import streamlit as st
 import pandas as pd
 import yfinance as yf
@@ -81,10 +80,11 @@ def analyze_results(screening_results, analysis_date):
             last_close = data['Close'].iloc[-1]
 
             # ✅ Harga Analisa = harga closing 1 hari perdagangan sebelum tanggal analisis
-            target_date = analysis_date - timedelta(days=1)
-            
+            # Konversi ke timezone-aware untuk menghindari error perbandingan
+            target_date = pd.Timestamp(analysis_date - timedelta(days=1)).tz_localize('Asia/Jakarta')
+
             # Cari data perdagangan terakhir sebelum target_date
-            trading_days_before = data[data.index <= pd.Timestamp(target_date)]
+            trading_days_before = data[data.index <= target_date]
             
             if trading_days_before.empty:
                 st.warning(f"⚠️ Tidak ada data untuk {ticker} sebelum tanggal {target_date}")
