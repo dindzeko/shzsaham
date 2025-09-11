@@ -30,13 +30,25 @@ def detect_pattern(data):
         is_close_sequence
     ])
 
-# --- FUNGSI PENGAMBILAN DATA SAHAM ---
+# --- FUNGSI PENGAMBILAN DATA SAHAM UNTUK MODE 1 ---
 def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
-        start_date = end_date - timedelta(days=90)
+        
+        # Ambil data dari 10 hari ke belakang
+        start_date = end_date - timedelta(days=10)
         data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
-        return data if not data.empty else None
+        
+        # Filter hanya weekday (Senin-Jumat)
+        data = data[data.index.weekday < 5]
+        
+        # Ambil 4 trading day terakhir sampai end_date
+        if len(data) >= 4:
+            data = data.tail(4)
+        else:
+            data = data.copy()
+        
+        return data if len(data) == 4 else None
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
@@ -60,8 +72,8 @@ def load_google_drive_excel(file_url):
         st.error(f"Gagal membaca file: {e}")
         return None
 
-# --- ✅ FUNGSI DIPERBAIKI: CARI TANGGAL POLA UNTUK TICKER TERTENTU ---
-def find_pattern_dates_for_ticker(ticker, start_date, end_date):
+# --- ✅ FUNGSI BARU: CARI TANGGAL KONFIRMASI UNTUK TICKER ---
+def find_confirmation_dates_for_ticker(ticker, start_date, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
         data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
@@ -69,57 +81,70 @@ def find_pattern_dates_for_ticker(ticker, start_date, end_date):
         if data.empty or len(data) < 4:
             return []
 
-        # ✅ KONVERSI KE TIMEZONE JAKARTA
+        # Konversi timezone
         if data.index.tz is None:
             data.index = data.index.tz_localize('UTC').tz_convert('Asia/Jakarta')
         else:
             data.index = data.index.tz_convert('Asia/Jakarta')
 
-        pattern_dates = []
+        # Filter hanya weekday
+        data = data[data.index.weekday < 5]
 
-        # Geser window 4 candle
+        confirmation_dates = []
+
         for i in range(3, len(data)):
-            window_data = data.iloc[i-3:i+1].copy()  # 4 baris: i-3, i-2, i-1, i
-            if detect_pattern(window_data):
-                # ✅ AMBIL TANGGAL DARI WINDOW ITU SENDIRI — INI PERBAIKAN UTAMA!
-                pattern_date = window_data.index[-1].date()
-                pattern_dates.append(pattern_date)
+            window_data = data.iloc[i-3:i+1].copy()
+            
+            if window_data['Close'].isna().any() or window_data['Open'].isna().any():
+                continue
 
-        return pattern_dates
+            if detect_pattern(window_data):
+                # ✅ Tanggal candle ke-4
+                pattern_date = window_data.index[-1].date()
+
+                # ✅ Cari hari perdagangan pertama setelah pattern_date
+                next_trading_day = pattern_date + timedelta(days=1)
+                while next_trading_day <= end_date:
+                    if next_trading_day.weekday() < 5:  # Senin-Jumat
+                        confirmation_dates.append(next_trading_day)
+                        break
+                    next_trading_day += timedelta(days=1)
+
+        return confirmation_dates
 
     except Exception as e:
         st.error(f"Gagal menganalisis {ticker}: {e}")
         return []
 
-# --- FUNGSI ANALISIS TAMBAHAN UNTUK SETIAP TANGGAL POLA (DENGAN MA 200) ---
-def analyze_pattern_dates(ticker, pattern_dates):
+# --- FUNGSI ANALISIS TAMBAHAN UNTUK SETIAP TANGGAL KONFIRMASI (DENGAN MA 200) ---
+def analyze_pattern_dates(ticker, confirmation_dates):
     enhanced_results = []
 
-    for p_date in pattern_dates:
+    for conf_date in confirmation_dates:
         try:
-            # Ambil data 90 hari sebelum tanggal pola sampai tanggal pola + 1 hari
-            end_date = p_date + timedelta(days=1)
-            start_date = p_date - timedelta(days=90)
+            # Ambil data 90 hari sebelum tanggal konfirmasi sampai tanggal konfirmasi
+            end_date = conf_date
+            start_date = conf_date - timedelta(days=90)
             stock = yf.Ticker(f"{ticker}.JK")
-            data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+            data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'))
 
             if data.empty or len(data) < 20:
                 continue
 
-            # ✅ Harga Terakhir = harga closing pada tanggal pola
-            last_close_series = data.loc[data.index.date == p_date]['Close']
+            # ✅ Harga Terakhir = harga closing pada tanggal konfirmasi
+            last_close_series = data.loc[data.index.date == conf_date]['Close']
             if last_close_series.empty:
                 continue
             last_close = last_close_series.iloc[0]
 
-            # ✅ Harga Analisa = harga closing 1 hari sebelum tanggal pola
-            prev_trading_days = data[data.index.date < p_date]
+            # ✅ Harga Analisa = harga closing 1 hari sebelum tanggal konfirmasi
+            prev_trading_days = data[data.index.date < conf_date]
             if prev_trading_days.empty:
                 continue
             analysis_close = prev_trading_days['Close'].iloc[-1]
 
             # ✅ Volume
-            latest_volume_series = data.loc[data.index.date == p_date]['Volume']
+            latest_volume_series = data.loc[data.index.date == conf_date]['Volume']
             if latest_volume_series.empty:
                 continue
             latest_volume = latest_volume_series.iloc[0]
@@ -134,7 +159,7 @@ def analyze_pattern_dates(ticker, pattern_dates):
 
             enhanced_results.append({
                 "Ticker": ticker,
-                "Tanggal Pola": p_date,
+                "Tanggal Konfirmasi": conf_date,
                 "Harga Terakhir": round(last_close, 2),
                 "Harga Analisa": round(analysis_close, 2),
                 "Volume (Rp)": round(volume_rp, 2),
@@ -145,7 +170,7 @@ def analyze_pattern_dates(ticker, pattern_dates):
             })
 
         except Exception as e:
-            st.error(f"⚠️ Gagal menganalisis {ticker} pada {p_date}: {str(e)}")
+            st.error(f"⚠️ Gagal menganalisis {ticker} pada {conf_date}: {str(e)}")
             continue
 
     return pd.DataFrame(enhanced_results)
@@ -221,7 +246,7 @@ def app():
         return
 
     # Pilih Mode
-    mode = st.radio("Pilih Mode Screening:", ("📅 Screening by Tanggal", "🔍 Cari Tanggal Pola untuk Ticker Tertentu"))
+    mode = st.radio("Pilih Mode Screening:", ("📅 Screening by Tanggal", "🔍 Cari Tanggal Konfirmasi untuk Ticker Tertentu"))
 
     if mode == "📅 Screening by Tanggal":
         tickers = df['Ticker'].dropna().unique().tolist()
@@ -235,7 +260,7 @@ def app():
             for i, ticker in enumerate(tickers):
                 data = get_stock_data(ticker, analysis_date)
 
-                if data is not None and len(data) >= 50:
+                if data is not None and len(data) >= 4:
                     if detect_pattern(data):
                         papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
                         results.append({
@@ -254,27 +279,27 @@ def app():
             else:
                 st.warning("Tidak ada saham yang cocok dengan pola.")
 
-    else:  # Mode: Cari Tanggal Pola untuk Ticker Tertentu — DIPERBAIKI!
+    else:  # Mode: Cari Tanggal Konfirmasi untuk Ticker Tertentu
         ticker_input = st.text_input("📌 Masukkan Ticker Saham (tanpa .JK):", "").strip().upper()
         today = datetime.today().date()
         start_date = today - timedelta(days=90)
         end_date = today + timedelta(days=1)  # ✅ PERBAIKAN: agar data hari ini ikut terambil
 
-        st.info(f"📅 Mencari pola dari {start_date} hingga {today}")
+        st.info(f"📅 Mencari tanggal konfirmasi dari {start_date} hingga {today}")
 
-        if st.button("🔍 Cari Tanggal Pola Pisau Jatuh"):
+        if st.button("🔍 Cari Tanggal Konfirmasi Pisau Jatuh"):
             if not ticker_input:
                 st.warning("❗ Silakan masukkan ticker saham.")
             else:
-                with st.spinner(f"Mencari tanggal pola untuk **{ticker_input}** dalam 90 hari terakhir..."):
-                    pattern_dates = find_pattern_dates_for_ticker(ticker_input, start_date, end_date)  # ✅ Pakai end_date +1
+                with st.spinner(f"Mencari tanggal konfirmasi untuk **{ticker_input}** dalam 90 hari terakhir..."):
+                    confirmation_dates = find_confirmation_dates_for_ticker(ticker_input, start_date, end_date)
 
-                if pattern_dates:
-                    st.success(f"✅ Ditemukan {len(pattern_dates)} tanggal pola untuk **{ticker_input}**")
-                    final_df = analyze_pattern_dates(ticker_input, pattern_dates)
+                if confirmation_dates:
+                    st.success(f"✅ Ditemukan {len(confirmation_dates)} tanggal konfirmasi untuk **{ticker_input}**")
+                    final_df = analyze_pattern_dates(ticker_input, confirmation_dates)
                     st.session_state.screening_results = final_df
                 else:
-                    st.warning(f"❌ Tidak ada tanggal pola ditemukan untuk **{ticker_input}** dalam 90 hari terakhir.")
+                    st.warning(f"❌ Tidak ada tanggal konfirmasi ditemukan untuk **{ticker_input}** dalam 90 hari terakhir.")
 
     # Tampilkan hasil (sama untuk kedua mode)
     if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:
