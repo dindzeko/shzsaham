@@ -60,7 +60,7 @@ def load_google_drive_excel(file_url):
         st.error(f"Gagal membaca file: {e}")
         return None
 
-# --- FUNGSI BARU: CARI TANGGAL POLA UNTUK TICKER TERTENTU (MAKS 2 BULAN TERAKHIR) ---
+# --- ✅ FUNGSI DIPERBAIKI: CARI TANGGAL POLA UNTUK TICKER TERTENTU ---
 def find_pattern_dates_for_ticker(ticker, start_date, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
@@ -69,13 +69,20 @@ def find_pattern_dates_for_ticker(ticker, start_date, end_date):
         if data.empty or len(data) < 4:
             return []
 
+        # ✅ KONVERSI KE TIMEZONE JAKARTA
+        if data.index.tz is None:
+            data.index = data.index.tz_localize('UTC').tz_convert('Asia/Jakarta')
+        else:
+            data.index = data.index.tz_convert('Asia/Jakarta')
+
         pattern_dates = []
 
         # Geser window 4 candle
         for i in range(3, len(data)):
             window_data = data.iloc[i-3:i+1].copy()  # 4 baris: i-3, i-2, i-1, i
             if detect_pattern(window_data):
-                pattern_date = data.index[i].date()  # Tanggal candle ke-4
+                # ✅ AMBIL TANGGAL DARI WINDOW ITU SENDIRI — INI PERBAIKAN UTAMA!
+                pattern_date = window_data.index[-1].date()
                 pattern_dates.append(pattern_date)
 
         return pattern_dates
@@ -123,7 +130,7 @@ def analyze_pattern_dates(ticker, pattern_dates):
             # ✅ Moving Averages
             ma5 = data['Close'].tail(5).mean()
             ma20 = data['Close'].tail(20).mean()
-            ma200 = data['Close'].tail(200).mean() if len(data) >= 200 else data['Close'].mean()  # fallback jika data < 200
+            ma200 = data['Close'].tail(200).mean() if len(data) >= 200 else data['Close'].mean()
 
             enhanced_results.append({
                 "Ticker": ticker,
@@ -134,7 +141,7 @@ def analyze_pattern_dates(ticker, pattern_dates):
                 "Volume (Lot)": int(volume_lot),
                 "MA 5": round(ma5, 2),
                 "MA 20": round(ma20, 2),
-                "MA 200": round(ma200, 2)  # ✅ DITAMBAHKAN
+                "MA 200": round(ma200, 2)
             })
 
         except Exception as e:
@@ -179,7 +186,7 @@ def analyze_results(screening_results, analysis_date):
 
             ma5 = data['Close'].tail(5).mean()
             ma20 = data['Close'].tail(20).mean()
-            ma200 = data['Close'].tail(200).mean() if len(data) >= 200 else data['Close'].mean()  # ✅ DITAMBAHKAN
+            ma200 = data['Close'].tail(200).mean() if len(data) >= 200 else data['Close'].mean()
 
             enhanced_results.append({
                 "Ticker": ticker,
@@ -190,7 +197,7 @@ def analyze_results(screening_results, analysis_date):
                 "Volume (Lot)": volume_lot,
                 "MA 5": round(ma5, 2),
                 "MA 20": round(ma20, 2),
-                "MA 200": round(ma200, 2)  # ✅ DITAMBAHKAN
+                "MA 200": round(ma200, 2)
             })
 
         except Exception as e:
@@ -247,10 +254,11 @@ def app():
             else:
                 st.warning("Tidak ada saham yang cocok dengan pola.")
 
-    else:  # Mode: Cari Tanggal Pola untuk Ticker Tertentu — DIBATASI 2 BULAN
+    else:  # Mode: Cari Tanggal Pola untuk Ticker Tertentu — DIPERBAIKI!
         ticker_input = st.text_input("📌 Masukkan Ticker Saham (tanpa .JK):", "").strip().upper()
         today = datetime.today().date()
-        start_date = today - timedelta(days=60)  # Hanya 2 bulan terakhir
+        start_date = today - timedelta(days=90)
+        end_date = today + timedelta(days=1)  # ✅ PERBAIKAN: agar data hari ini ikut terambil
 
         st.info(f"📅 Mencari pola dari {start_date} hingga {today}")
 
@@ -258,15 +266,15 @@ def app():
             if not ticker_input:
                 st.warning("❗ Silakan masukkan ticker saham.")
             else:
-                with st.spinner(f"Mencari tanggal pola untuk **{ticker_input}** dalam 60 hari terakhir..."):
-                    pattern_dates = find_pattern_dates_for_ticker(ticker_input, start_date, today)
+                with st.spinner(f"Mencari tanggal pola untuk **{ticker_input}** dalam 90 hari terakhir..."):
+                    pattern_dates = find_pattern_dates_for_ticker(ticker_input, start_date, end_date)  # ✅ Pakai end_date +1
 
                 if pattern_dates:
                     st.success(f"✅ Ditemukan {len(pattern_dates)} tanggal pola untuk **{ticker_input}**")
                     final_df = analyze_pattern_dates(ticker_input, pattern_dates)
                     st.session_state.screening_results = final_df
                 else:
-                    st.warning(f"❌ Tidak ada tanggal pola ditemukan untuk **{ticker_input}** dalam 60 hari terakhir.")
+                    st.warning(f"❌ Tidak ada tanggal pola ditemukan untuk **{ticker_input}** dalam 90 hari terakhir.")
 
     # Tampilkan hasil (sama untuk kedua mode)
     if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:
@@ -278,7 +286,7 @@ def app():
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             st.session_state.screening_results.to_excel(writer, sheet_name='Hasil Screening', index=False)
         
-        mode_label = "by_tanggal" if mode == "📅 Screening by Tanggal" else f"by_ticker_{ticker_input}" if 'ticker_input' in locals() else "unknown"
+        mode_label = "by_tanggal" if mode == "📅 Screening by Tanggal" else f"by_ticker_{ticker_input}" if 'ticker_input' in locals() and ticker_input else "unknown"
         st.download_button(
             label="📥 Unduh Hasil Screening (Excel)",
             data=output.getvalue(),
