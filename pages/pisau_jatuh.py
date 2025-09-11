@@ -5,19 +5,39 @@ from datetime import datetime, timedelta
 import numpy as np
 import io
 
-# --- FUNGSI DETEKSI POLA (TIDAK BERUBAH) ---
-def detect_pattern(data):
+# --- FUNGSI DETEKSI POLA (DIPERBAIKI) ---
+def detect_pattern(data, full_data=None):
+    """
+    Fungsi untuk mendeteksi pola pisau jatuh
+    data: 4 hari terakhir untuk pola candle
+    full_data: data lengkap untuk menghitung moving average (opsional)
+    """
     if len(data) < 4:
         return False
+    
+    # Jika full_data tidak diberikan, gunakan data yang ada
+    if full_data is None:
+        full_data = data
+        
     recent = data.tail(4)
     c1, c2, c3, c4 = recent.iloc[0], recent.iloc[1], recent.iloc[2], recent.iloc[3]
 
+    # Kriteria pola pisau jatuh
     is_c1_bullish = c1['Close'] > c1['Open'] and (c1['Close'] - c1['Open']) > 0.015 * c1['Open']
     is_c2_bearish = c2['Close'] < c2['Open'] and c2['Close'] < c1['Close']
     is_c3_bearish = c3['Close'] < c3['Open']
     is_c4_bearish = c4['Close'] < c4['Open']
-    is_uptrend = data['Close'].iloc[-20:].mean() > data['Close'].iloc[-50:-20].mean() if len(data) >= 50 else False
-    is_close_sequence = c2['Close'] > c3['Close'] > c4['Close']
+    
+    # Perbaikan: Gunakan full_data untuk menghitung trend
+    if len(full_data) >= 50:
+        ma_short = full_data['Close'].iloc[-20:].mean()
+        ma_long = full_data['Close'].iloc[-50:-20].mean()
+        is_uptrend = ma_short > ma_long
+    else:
+        is_uptrend = False
+        
+    # Perbaikan: Kriteria urutan harga close yang lebih tepat
+    is_close_sequence = c2['Close'] > c3['Close'] and c3['Close'] > c4['Close']
 
     return all([
         is_c1_bullish,
@@ -32,12 +52,14 @@ def detect_pattern(data):
 def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
-        start_date = end_date - timedelta(days=10)
+        # Ambil data lebih banyak untuk menghitung moving average
+        start_date = end_date - timedelta(days=60)
         data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
         data = data[data.index.weekday < 5]
         if len(data) >= 4:
-            data = data.tail(4)
-        return data if len(data) == 4 else None
+            # Kembalikan data lengkap untuk analisis trend
+            return data
+        return None
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
@@ -62,32 +84,46 @@ def load_google_drive_excel(file_url):
 def find_confirmation_dates_for_ticker(ticker, start_date, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
-        data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+        # Ambil data yang lebih panjang untuk analisis trend
+        data_start_date = start_date - timedelta(days=60)
+        data = stock.history(start=data_start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+        
         if data.empty or len(data) < 4:
             return []
 
         # Bersihkan index
         data.index = pd.to_datetime(data.index).tz_localize(None)
-        data = data[data.index.weekday < 5]
+        data = data[data.index.weekday < 5]  # Hanya hari kerja
 
         results = []
-        for i in range(3, len(data)):
-            window_data = data.iloc[i-3:i+1].copy()
-            if window_data['Close'].isna().any() or window_data['Open'].isna().any():
+        # Perbaikan: Iterasi melalui data dengan window 4 hari
+        for i in range(4, len(data)):
+            window_data = data.iloc[i-4:i].copy()  # Ambil 4 hari untuk pola
+            
+            # Pastikan hari berurutan (tidak ada missing day)
+            date_diff = (window_data.index[-1] - window_data.index[0]).days
+            if date_diff > 4:
                 continue
-
-            if detect_pattern(window_data):
+                
+            # Gunakan data lengkap untuk analisis trend
+            full_data_for_trend = data.iloc[:i]  # Semua data sampai hari ke-i
+            
+            if detect_pattern(window_data, full_data_for_trend):
                 pattern_date = window_data.index[-1].date()
+                
                 # Cari hari trading berikutnya
                 next_trading_day = pattern_date + timedelta(days=1)
-                while next_trading_day <= end_date:
+                while next_trading_day <= end_date.date():
                     if next_trading_day.weekday() < 5:
-                        results.append({
-                            "pattern_date": pattern_date,
-                            "confirmation_date": next_trading_day
-                        })
+                        # Pastikan hari tersebut ada dalam data
+                        if next_trading_day in data.index.date:
+                            results.append({
+                                "pattern_date": pattern_date,
+                                "confirmation_date": next_trading_day
+                            })
                         break
                     next_trading_day += timedelta(days=1)
+                    
         return results
     except Exception as e:
         st.error(f"Gagal menganalisis {ticker}: {e}")
@@ -104,27 +140,27 @@ def analyze_pattern_dates(ticker, results):
             start_date = pattern_date - timedelta(days=90)
             end_date = conf_date + timedelta(days=1)
             data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+            
             if data.empty or len(data) < 20:
                 continue
 
-            last_close_series = data.loc[data.index.date == conf_date]['Close']
-            if last_close_series.empty:
+            # Pastikan tanggal konfirmasi ada dalam data
+            if pd.Timestamp(conf_date) not in data.index:
                 continue
-            last_close = last_close_series.iloc[0]
-
-            prev_trading_days = data[data.index.date < conf_date]
-            if prev_trading_days.empty:
+                
+            last_close = data.loc[pd.Timestamp(conf_date)]['Close']
+            
+            # Dapatkan harga penutupan hari sebelumnya
+            prev_day = data[data.index < pd.Timestamp(conf_date)]
+            if prev_day.empty:
                 continue
-            analysis_close = prev_trading_days['Close'].iloc[-1]
+            analysis_close = prev_day['Close'].iloc[-1]
 
-            latest_volume_series = data.loc[data.index.date == conf_date]['Volume']
-            if latest_volume_series.empty:
-                continue
-            latest_volume = latest_volume_series.iloc[0]
-
+            latest_volume = data.loc[pd.Timestamp(conf_date)]['Volume']
             volume_lot = latest_volume // 100
             volume_rp = last_close * latest_volume
 
+            # Hitung moving averages
             ma5 = data['Close'].tail(5).mean()
             ma20 = data['Close'].tail(20).mean()
             ma200 = data['Close'].tail(200).mean() if len(data) >= 200 else data['Close'].mean()
@@ -156,15 +192,18 @@ def analyze_results(screening_results, analysis_date):
             end_date = datetime.today().date()
             start_date = end_date - timedelta(days=90)
             data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'))
+            
             if data.empty or len(data) < 20:
                 continue
 
             last_close = data['Close'].iloc[-1]
             target_date = pd.Timestamp(analysis_date - timedelta(days=1))
-            trading_days_before = data[data.index.date <= target_date.date()]
-            if trading_days_before.empty:
+            
+            # Pastikan tanggal analisis ada dalam data
+            if target_date.date() not in data.index.date:
                 continue
-            analysis_close = trading_days_before['Close'].iloc[-1]
+                
+            analysis_close = data.loc[target_date]['Close']
 
             latest_volume = data['Volume'].iloc[-1]
             volume_lot = latest_volume // 100
@@ -205,37 +244,53 @@ def app():
     if mode == "📅 Screening by Tanggal":
         tickers = df['Ticker'].dropna().unique().tolist()
         analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
+        
+        # Tambahkan opsi untuk menyesuaikan kriteria
+        st.subheader("Kriteria Pola Pisau Jatuh")
+        min_volume_lot = st.number_input("Volume Minimum (Lot)", min_value=100, value=1000, step=100)
+        
         if st.button("🔍 Mulai Screening"):
             results = []
             progress_bar = st.progress(0)
             progress_text = st.empty()
+            
             for i, ticker in enumerate(tickers):
                 data = get_stock_data(ticker, analysis_date)
                 if data is not None and len(data) >= 4:
-                    if detect_pattern(data):
+                    # Gunakan data lengkap untuk analisis trend
+                    if detect_pattern(data.tail(4), data):
                         papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
                         results.append({"Ticker": ticker, "Papan": papan})
+                
                 progress = (i + 1) / len(tickers)
                 progress_bar.progress(progress)
                 progress_text.text(f"Progress: {int(progress * 100)}% - Memproses {ticker}")
+            
             if results:
                 temp_df = pd.DataFrame(results)
                 final_df = analyze_results(temp_df, analysis_date)
+                
+                # Filter berdasarkan volume minimum
+                final_df = final_df[final_df['Volume (Lot)'] >= min_volume_lot]
+                
                 st.session_state.screening_results = final_df
             else:
                 st.warning("Tidak ada saham yang cocok dengan pola.")
     else:
         ticker_input = st.text_input("📌 Masukkan Ticker Saham (tanpa .JK):", "").strip().upper()
         today = datetime.today().date()
-        start_date = today - timedelta(days=60)
-        end_date = today + timedelta(days=1)
+        start_date = today - timedelta(days=90)  # Periode lebih panjang untuk analisis
+        end_date = today
+        
         st.info(f"📅 Mencari tanggal konfirmasi dari {start_date} hingga {today}")
+        
         if st.button("🔍 Cari Tanggal Konfirmasi Pisau Jatuh"):
             if not ticker_input:
                 st.warning("❗ Silakan masukkan ticker saham.")
             else:
                 with st.spinner(f"Mencari tanggal konfirmasi untuk **{ticker_input}**..."):
                     results = find_confirmation_dates_for_ticker(ticker_input, start_date, end_date)
+                
                 if results:
                     st.success(f"✅ Ditemukan {len(results)} pola untuk **{ticker_input}**")
                     final_df = analyze_pattern_dates(ticker_input, results)
@@ -250,6 +305,7 @@ def app():
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             st.session_state.screening_results.to_excel(writer, sheet_name='Hasil Screening', index=False)
+        
         mode_label = "by_tanggal" if mode == "📅 Screening by Tanggal" else f"by_ticker_{ticker_input}" if 'ticker_input' in locals() and ticker_input else "unknown"
         st.download_button(
             label="📥 Unduh Hasil Screening (Excel)",
