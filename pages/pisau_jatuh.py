@@ -1,12 +1,14 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import numpy as np
 from scipy.signal import argrelextrema
 import io
 
-# --- FUNGSI DETEKSI POLA (TIDAK BERUBAH SAMA SEKALI) ---
+# =========================================================
+# === FUNGSI DETEKSI POLA (TIDAK BERUBAH SAMA SEKALI)  ===
+# =========================================================
 def detect_pattern(data):
     if len(data) < 4:
         return False
@@ -30,18 +32,37 @@ def detect_pattern(data):
         is_close_sequence
     ])
 
-# --- FUNGSI PENGAMBILAN DATA SAHAM ---
+# =========================================================
+# === UTILITAS / I/O DATA ===
+# =========================================================
+def _normalize_tz(df):
+    """Pastikan index time-series berada di Asia/Jakarta untuk konsistensi tanggal perdagangan."""
+    if df is None or df.empty:
+        return df
+    try:
+        if df.index.tz is None:
+            df = df.tz_localize('UTC').tz_convert('Asia/Jakarta')
+        else:
+            df = df.tz_convert('Asia/Jakarta')
+    except Exception:
+        # Jika gagal konversi, biarkan apa adanya
+        pass
+    return df
+
 def get_stock_data(ticker, end_date):
+    """Ambil ~90 hari data hingga end_date (exclusive), return DataFrame atau None."""
     try:
         stock = yf.Ticker(f"{ticker}.JK")
         start_date = end_date - timedelta(days=90)
-        data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
-        return data if not data.empty else None
+        # yfinance end bersifat exclusive, jadi aman dipakai apa adanya
+        data = stock.history(start=start_date.strftime('%Y-%m-%d'),
+                             end=end_date.strftime('%Y-%m-%d'))
+        data = _normalize_tz(data)
+        return data if (data is not None and not data.empty) else None
     except Exception as e:
         st.error(f"Gagal mengambil data untuk {ticker}: {e}")
         return None
 
-# --- FUNGSI MEMUAT DATA DARI GOOGLE DRIVE ---
 def load_google_drive_excel(file_url):
     try:
         file_id = file_url.split("/d/")[1].split("/")[0]
@@ -60,46 +81,44 @@ def load_google_drive_excel(file_url):
         st.error(f"Gagal membaca file: {e}")
         return None
 
-# --- FUNGSI UNTUK ANALISIS TAMBAHAN SETELAH SCREENING (DENGAN VALIDASI KETAT) ---
+# =========================================================
+# === ANALISIS TAMBAHAN SETELAH SCREENING (MODE 1)     ===
+# =========================================================
 def analyze_results(screening_results, analysis_date):
     enhanced_results = []
 
     for _, row in screening_results.iterrows():
         ticker = row['Ticker']
         try:
-            # Ambil data dari 90 hari ke belakang hingga hari ini
             stock = yf.Ticker(f"{ticker}.JK")
             end_date = datetime.today().date()
             start_date = end_date - timedelta(days=90)
-            data = stock.history(start=start_date.strftime('%Y-%m-%d'), end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d'))
+            data = stock.history(
+                start=start_date.strftime('%Y-%m-%d'),
+                end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d')
+            )
+            data = _normalize_tz(data)
 
-            if data.empty or len(data) < 20:
+            if data is None or data.empty or len(data) < 20:
                 continue
 
-            # ✅ Harga Terakhir = harga closing terbaru (hari perdagangan terakhir)
-            last_close = data['Close'].iloc[-1]
+            # Harga Terakhir = closing hari perdagangan terakhir
+            last_close = float(data['Close'].iloc[-1])
 
-            # ✅ Harga Analisa = harga closing 1 hari perdagangan sebelum tanggal analisis
-            # Konversi ke timezone-aware untuk menghindari error perbandingan
+            # Harga Analisa = closing hari perdagangan terakhir SEBELUM tanggal analisis
             target_date = pd.Timestamp(analysis_date - timedelta(days=1)).tz_localize('Asia/Jakarta')
-
-            # Cari data perdagangan terakhir sebelum target_date
             trading_days_before = data[data.index <= target_date]
-            
             if trading_days_before.empty:
-                st.warning(f"⚠️ Tidak ada data untuk {ticker} sebelum tanggal {target_date}")
+                st.warning(f"⚠️ Tidak ada data untuk {ticker} sebelum tanggal {target_date.date()}")
                 continue
-                
-            # Ambil harga closing dari hari perdagangan terakhir sebelum target_date
-            analysis_close = trading_days_before['Close'].iloc[-1]
+            analysis_close = float(trading_days_before['Close'].iloc[-1])
 
-            # ✅ Hitung volume dan MA
-            latest_volume = data['Volume'].iloc[-1]
-            volume_lot = latest_volume // 100
+            latest_volume = float(data['Volume'].iloc[-1])
+            volume_lot = int(latest_volume // 100)
             volume_rp = last_close * latest_volume
 
-            ma5 = data['Close'].tail(5).mean()
-            ma20 = data['Close'].tail(20).mean()
+            ma5 = float(data['Close'].tail(5).mean())
+            ma20 = float(data['Close'].tail(20).mean())
 
             enhanced_results.append({
                 "Ticker": ticker,
@@ -117,66 +136,194 @@ def analyze_results(screening_results, analysis_date):
 
     return pd.DataFrame(enhanced_results)
 
-# --- FUNGSI UTAMA APP ---
+# =========================================================
+# === MODE 2: CARI TANGGAL KONFIRMASI (HARI KE-5)      ===
+# =========================================================
+def find_confirmation_dates_for_ticker(ticker: str,
+                                       lookback_days: int = 180,
+                                       end_date: date = None) -> pd.DataFrame:
+    """
+    Mencari semua kejadian pola (4 candle terakhir membentuk 'pisau jatuh' sesuai detect_pattern),
+    lalu mengembalikan tanggal konfirmasi = hari perdagangan ke-5 (bar berikutnya).
+    """
+    try:
+        if end_date is None:
+            end_date = datetime.today().date()
+
+        start_date = end_date - timedelta(days=lookback_days)
+        stock = yf.Ticker(f"{ticker}.JK")
+        data = stock.history(
+            start=start_date.strftime('%Y-%m-%d'),
+            end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d')
+        )
+        data = _normalize_tz(data)
+
+        if data is None or data.empty:
+            return pd.DataFrame()
+
+        data = data.copy()
+
+        # Iterasi rolling: untuk setiap index i (>=3) cek subset hingga i (agar MA20/MA50 di detect_pattern valid)
+        confirmations = []
+        # batas terakhir adalah len(data)-2 (supaya i+1 ada untuk konfirmasi)
+        for i in range(3, len(data) - 1):
+            subset = data.iloc[:i + 1]  # data s.d. bar i
+            if len(subset) >= 50 and detect_pattern(subset):
+                # C1..C4 = 4 bar terakhir di subset
+                c1_idx = subset.index[-4]
+                c2_idx = subset.index[-3]
+                c3_idx = subset.index[-2]
+                c4_idx = subset.index[-1]
+                confirm_idx = data.index[i + 1]  # bar berikutnya (hari ke-5)
+
+                confirmations.append({
+                    "Ticker": ticker,
+                    "C1 (Bull) Tgl": c1_idx.date(),
+                    "C2 Tgl": c2_idx.date(),
+                    "C3 Tgl": c3_idx.date(),
+                    "C4 Tgl": c4_idx.date(),
+                    "Tgl Konfirmasi (Hari ke-5)": confirm_idx.date(),
+                    "Harga Konfirmasi (Close)": round(float(data.loc[confirm_idx, "Close"]), 2),
+                    "Volume Konfirmasi": int(data.loc[confirm_idx, "Volume"]),
+                })
+
+        return pd.DataFrame(confirmations)
+
+    except Exception as e:
+        st.error(f"Gagal mencari tanggal konfirmasi untuk {ticker}: {e}")
+        return pd.DataFrame()
+
+# =========================================================
+# === APLIKASI STREAMLIT                                ===
+# =========================================================
 def app():
     st.title("🔪 Pisau Jatuh Screener")
 
-    # Inisialisasi session state
+    # Session state untuk hasil mode 1
     if 'screening_results' not in st.session_state:
         st.session_state.screening_results = None
 
-    file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
-    df = load_google_drive_excel(file_url)
+    # Pilih mode
+    mode = st.radio(
+        "Pilih Mode Analisis",
+        options=["🗓️ Cari Saham by Tanggal (Mode 1)", "🔎 Cari Tanggal Konfirmasi by Ticker (Mode 2)"],
+        index=0
+    )
 
-    if df is None or 'Ticker' not in df.columns:
-        return
+    # ==========================
+    # MODE 1: BY TANGGAL (ASLI)
+    # ==========================
+    if mode.startswith("🗓️"):
+        file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
+        df = load_google_drive_excel(file_url)
+        if df is None or 'Ticker' not in df.columns:
+            st.stop()
 
-    tickers = df['Ticker'].dropna().unique().tolist()
-    analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today())
+        tickers = df['Ticker'].dropna().unique().tolist()
 
-    if st.button("🔍 Mulai Screening"):
-        results = []
-        progress_bar = st.progress(0)
-        progress_text = st.empty()
+        # Catatan: st.date_input mengembalikan datetime.date; konsistenkan ke date
+        default_date = datetime.today().date()
+        analysis_date = st.date_input("📅 Tanggal Analisis", value=default_date)
 
-        for i, ticker in enumerate(tickers):
-            data = get_stock_data(ticker, analysis_date)
+        if st.button("🔍 Mulai Screening"):
+            results = []
+            progress_bar = st.progress(0)
+            progress_text = st.empty()
 
-            if data is not None and len(data) >= 50:
-                if detect_pattern(data):
-                    papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
-                    results.append({
-                        "Ticker": ticker,
-                        "Papan": papan
-                    })
+            for i, ticker in enumerate(tickers):
+                data = get_stock_data(ticker, analysis_date)
 
-            progress = (i + 1) / len(tickers)
-            progress_bar.progress(progress)
-            progress_text.text(f"Progress: {int(progress * 100)}% - Memproses {ticker}")
+                if data is not None and len(data) >= 50:
+                    if detect_pattern(data):
+                        papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
+                        results.append({
+                            "Ticker": ticker,
+                            "Papan": papan
+                        })
 
-        if results:
-            # Tahap 2: Analisis tambahan dengan validasi ketat
-            temp_df = pd.DataFrame(results)
-            final_df = analyze_results(temp_df, analysis_date)
-            st.session_state.screening_results = final_df
-        else:
-            st.warning("Tidak ada saham yang cocok dengan pola.")
+                progress = (i + 1) / len(tickers)
+                progress_bar.progress(progress)
+                progress_text.text(f"Progress: {int(progress * 100)}% - Memproses {ticker}")
 
-    # Tampilkan hasil
-    if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:
-        st.subheader("✅ Saham yang Memenuhi Pola Pisau Jatuh")
-        st.dataframe(st.session_state.screening_results)
+            if results:
+                temp_df = pd.DataFrame(results)
+                final_df = analyze_results(temp_df, analysis_date)
+                st.session_state.screening_results = final_df
+            else:
+                st.session_state.screening_results = pd.DataFrame()
+                st.warning("Tidak ada saham yang cocok dengan pola.")
 
-        # --- DOWNLOAD HASIL KE EXCEL ---
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            st.session_state.screening_results.to_excel(writer, sheet_name='Hasil Screening', index=False)
-        
-        st.download_button(
-            label="📥 Unduh Hasil Screening (Excel)",
-            data=output.getvalue(),
-            file_name=f"pisau_jatuh_{datetime.today().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    elif st.session_state.screening_results is not None:
-        st.info("Tidak ada data yang memenuhi kriteria setelah analisis.")
+        # Tampilkan hasil Mode 1
+        if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:
+            st.subheader("✅ Saham yang Memenuhi Pola Pisau Jatuh (Mode 1)")
+            st.dataframe(st.session_state.screening_results, use_container_width=True)
+
+            # Download Excel
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                st.session_state.screening_results.to_excel(writer, sheet_name='Hasil Screening', index=False)
+
+            st.download_button(
+                label="📥 Unduh Hasil Screening (Excel)",
+                data=output.getvalue(),
+                file_name=f"pisau_jatuh_{datetime.today().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        elif st.session_state.screening_results is not None:
+            st.info("Tidak ada data yang memenuhi kriteria setelah analisis.")
+
+    # =============================================
+    # MODE 2: BY TICKER → CARI TANGGAL KONFIRMASI
+    # =============================================
+    else:
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            ticker_input = st.text_input("📝 Masukkan Ticker (tanpa .JK)", value="HUMI").strip().upper()
+        with col2:
+            lookback_days = st.number_input("Lookback (hari kalender)", min_value=60, max_value=730, value=180, step=10)
+        with col3:
+            end_date = st.date_input("Sampai Tanggal", value=datetime.today().date())
+
+        run = st.button("🔎 Cari Tanggal Konfirmasi (Hari ke-5)")
+
+        if run:
+            if not ticker_input:
+                st.error("Mohon isi ticker terlebih dahulu.")
+                st.stop()
+
+            with st.spinner(f"Mencari pola & tanggal konfirmasi untuk {ticker_input}.JK ..."):
+                df_conf = find_confirmation_dates_for_ticker(
+                    ticker=ticker_input,
+                    lookback_days=int(lookback_days),
+                    end_date=end_date
+                )
+
+            if df_conf.empty:
+                st.info(f"Tidak ditemukan tanggal konfirmasi untuk {ticker_input}.JK dalam {lookback_days} hari ke belakang.")
+            else:
+                st.success(f"Ditemukan {len(df_conf)} tanggal konfirmasi untuk {ticker_input}.JK")
+                # Urutkan berdasarkan tanggal konfirmasi terbaru ke lama
+                df_conf = df_conf.sort_values("Tgl Konfirmasi (Hari ke-5)", ascending=False).reset_index(drop=True)
+                st.dataframe(df_conf, use_container_width=True)
+
+                # Penjelasan singkat (sesuai contoh kasus HUMI 1–4 → 8)
+                st.caption(
+                    "Catatan: Pola terdeteksi bila 4 candle terakhir memenuhi kriteria. "
+                    "Tanggal konfirmasi adalah **hari perdagangan berikutnya** (hari ke-5). "
+                    "Jika ada libur/weekend (mis. 5–7 libur), maka konfirmasi jatuh pada tanggal perdagangan berikutnya (mis. tanggal 8)."
+                )
+
+                # Download hasil
+                out2 = io.BytesIO()
+                with pd.ExcelWriter(out2, engine='openpyxl') as writer:
+                    df_conf.to_excel(writer, sheet_name=f'{ticker_input}_Konfirmasi', index=False)
+                st.download_button(
+                    "📥 Unduh Hasil (Excel)",
+                    data=out2.getvalue(),
+                    file_name=f"konfirmasi_pisau_jatuh_{ticker_input}_{datetime.today().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+# Run app
+if __name__ == "__main__":
+    app()
