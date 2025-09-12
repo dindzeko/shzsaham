@@ -1,4 +1,5 @@
 # analisa_saham.py
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -24,22 +25,29 @@ INDICATOR_WEIGHTS = {
 # UTILITAS FORMAT & IDX
 # =========================
 def fmt_rp(x: float) -> str:
-    return f"Rp {x:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    try:
+        return f"Rp {float(x):,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+    except Exception:
+        return str(x)
 
 def fmt_int(x: float) -> str:
-    return f"{int(round(x)):,}".replace(",", ".")
+    try:
+        return f"{int(round(float(x))):,}".replace(",", ".")
+    except Exception:
+        return str(x)
 
 def shares_to_lot(shares: float) -> float:
-    return shares / 100.0
+    return float(shares) / 100.0
 
 def lot_to_shares(lot: float) -> int:
-    return int(lot * 100)
+    return int(float(lot) * 100)
 
 def get_idx_tick(price: float) -> int:
-    if price < 200: return 1
-    if price < 500: return 2
-    if price < 2000: return 5
-    if price < 5000: return 10
+    p = float(price)
+    if p < 200: return 1
+    if p < 500: return 2
+    if p < 2000: return 5
+    if p < 5000: return 10
     return 25
 
 def round_to_tick(price: float) -> float:
@@ -47,17 +55,15 @@ def round_to_tick(price: float) -> float:
     return round(price / tick) * tick
 
 def as_series(obj: pd.Series | pd.DataFrame) -> pd.Series:
-    """Paksa 1D Series (menghindari shape (n,1))."""
+    """
+    Paksa objek menjadi 1D Series (menghindari error shape (n,1)).
+    """
     if isinstance(obj, pd.DataFrame):
         s = obj.squeeze("columns")
     else:
         s = obj
     if not isinstance(s, pd.Series):
         s = pd.Series(s)
-    try:
-        s = pd.to_numeric(s, errors="ignore")
-    except Exception:
-        pass
     return s
 
 # =========================
@@ -67,50 +73,42 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """
     Samakan output yfinance agar selalu punya kolom:
     ['Open','High','Low','Close','Volume'] (case-insensitive).
-    - Flatten MultiIndex columns bila ada.
-    - Jika 'Close' tidak ada tapi 'Adj Close' ada, pakai itu.
+    - Flatten MultiIndex jika ada.
+    - Jika 'Close' tidak ada tapi 'Adj Close' ada, pakai itu sebagai Close.
     """
     if df is None or len(df) == 0:
         return df
 
-    # Flatten MultiIndex (kasus yfinance group_by='ticker')
+    # Flatten MultiIndex (group_by='ticker' atau lainnya)
     if isinstance(df.columns, pd.MultiIndex):
-        # Ambil level kolom yang berisi field OHLCV
-        if df.columns.nlevels == 2:
-            # Jika formatnya ('Open','BBCA.JK') → swap, xs ticker
-            # Cari level yang mengandung field OHLCV
-            l0 = set([str(x).lower() for x in df.columns.get_level_values(0)])
-            if {'open','high','low','close','adj close','volume'} & l0:
-                df = df.droplevel(1, axis=1)
-            else:
-                df = df.droplevel(0, axis=1)
+        # Umumnya format ('Open','BBCA.JK') → ambil level 0 (field OHLCV)
+        if {'open','high','low','close','adj close','volume'} & set([str(x).lower() for x in df.columns.get_level_values(0)]):
+            df = df.droplevel(1, axis=1)
         else:
-            # fallback: ambil level terakhir
-            df = df.droplevel(list(range(df.columns.nlevels-1)), axis=1)
+            df = df.droplevel(0, axis=1)
 
-    # Normalisasi kapitalisasi kolom (case-insensitive)
+    # Case-insensitive rename
     lower_map = {c.lower(): c for c in df.columns}
-    def get_col(name):
+    def find(name):
         return lower_map.get(name.lower(), None)
 
     rename_map = {}
     for target in ['Open','High','Low','Close','Adj Close','Volume']:
-        src = get_col(target)
+        src = find(target)
         if src:
             rename_map[src] = target
     df = df.rename(columns=rename_map)
 
-    # Jika Close belum ada tapi Adj Close tersedia → pakai Adj Close
+    # Jika Close hilang tapi ada Adj Close → pakai itu
     if 'Close' not in df.columns and 'Adj Close' in df.columns:
         df['Close'] = df['Adj Close']
 
-    # Pastikan semua kolom wajib ada
     required = ['Open','High','Low','Close','Volume']
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"Missing OHLCV columns after normalization: {missing}")
 
-    # Pastikan tipe numeric
+    # Pastikan numeric
     for c in required + (['Adj Close'] if 'Adj Close' in df.columns else []):
         df[c] = pd.to_numeric(df[c], errors='coerce')
 
@@ -127,7 +125,7 @@ def fetch_history_yf(ticker_jk: str, start: datetime, end: datetime) -> pd.DataF
         end=end.strftime("%Y-%m-%d"),
         auto_adjust=False,
         progress=False,
-        group_by="column",  # paksa kolom datar
+        group_by="column",
     )
     if raw is None or raw.empty:
         return raw
@@ -156,9 +154,7 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = rma(gain, period)
-    avg_loss = rma(loss, period)
-    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rs = rma(gain, period) / rma(loss, period).replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return rsi.fillna(50)
 
@@ -205,8 +201,8 @@ def compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
 
 def compute_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     close, volume = as_series(close), as_series(volume)
-    change = np.sign(close.diff().fillna(0))
-    obv = (volume * change).cumsum()
+    sign = np.sign(close.diff().fillna(0))
+    obv = (volume * sign).cumsum()
     return as_series(obv).fillna(0)
 
 def compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
@@ -297,13 +293,10 @@ def compute_support_resistance(df: pd.DataFrame) -> dict:
     candidates = [c for c in candidates if np.isfinite(c)]
 
     clustered = cluster_levels(candidates, tol=0.01)
-
     supports = [lvl for (lvl, _) in clustered if lvl < close]
     resistances = [lvl for (lvl, _) in clustered if lvl > close]
-
     supports = sorted(supports, reverse=True)[:3] if supports else [close * 0.95]
     resistances = sorted(resistances)[:3] if resistances else [close * 1.05]
-
     return {'Support': supports, 'Resistance': resistances, 'Fibonacci': fib}
 
 # =========================
@@ -546,7 +539,7 @@ def bandarmology_brief(df: pd.DataFrame, period: int = 30) -> dict:
     return out
 
 # =========================
-# DIVERGENCE
+# DIVERGENCE (FIX INDEX)
 # =========================
 def _local_peaks_troughs(series: pd.Series):
     s = as_series(series)
@@ -555,6 +548,11 @@ def _local_peaks_troughs(series: pd.Series):
     return s[peaks], s[troughs]
 
 def detect_divergence(price: pd.Series, indicator: pd.Series, lookback: int = 120) -> dict:
+    """
+    Perbaikan penting:
+    - Pakai .reindex(...) (BUKAN .loc[...]) agar tidak KeyError
+      bila timestamp puncak/lembah indikator tidak identik dengan harga.
+    """
     p = as_series(price).tail(lookback)
     i = as_series(indicator).reindex(p.index).ffill()
     p_peaks, p_troughs = _local_peaks_troughs(p)
@@ -562,25 +560,27 @@ def detect_divergence(price: pd.Series, indicator: pd.Series, lookback: int = 12
 
     out = {"bearish": None, "bullish": None}
 
+    # Bearish: Price HH, Indicator LH
     if len(p_peaks) >= 2 and len(i_peaks) >= 2:
         p_last2 = p_peaks.iloc[-2:]
-        i_last2 = i_peaks.loc[p_last2.index].dropna()
-        if len(i_last2) == 2 and (p_last2.iloc[-1] > p_last2.iloc[0]) and (i_last2.iloc[-1] < i_last2.iloc[0]):
-            out["bearish"] = {
-                "price_points": (p_last2.index[0], p_last2.index[-1]),
-                "indicator_points": (i_last2.index[0], i_last2.index[-1]),
-                "desc": "Bearish divergence (Price HH vs Indicator LH)"
-            }
+        i_last2 = i_peaks.reindex(p_last2.index)  # <— aman, tidak KeyError
+        if i_last2.notna().all():
+            if (p_last2.iloc[-1] > p_last2.iloc[0]) and (i_last2.iloc[-1] < i_last2.iloc[0]):
+                out["bearish"] = {
+                    "price_points": (p_last2.index[0], p_last2.index[-1]),
+                    "desc": "Bearish divergence (Price HH vs Indicator LH)"
+                }
 
+    # Bullish: Price LL, Indicator HL
     if len(p_troughs) >= 2 and len(i_troughs) >= 2:
         p_last2 = p_troughs.iloc[-2:]
-        i_last2 = i_troughs.loc[p_last2.index].dropna()
-        if len(i_last2) == 2 and (p_last2.iloc[-1] < p_last2.iloc[0]) and (i_last2.iloc[-1] > i_last2.iloc[0]):
-            out["bullish"] = {
-                "price_points": (p_last2.index[0], p_last2.index[-1]),
-                "indicator_points": (i_last2.index[0], i_last2.index[-1]),
-                "desc": "Bullish divergence (Price LL vs Indicator HL)"
-            }
+        i_last2 = i_troughs.reindex(p_last2.index)
+        if i_last2.notna().all():
+            if (p_last2.iloc[-1] < p_last2.iloc[0]) and (i_last2.iloc[-1] > i_last2.iloc[0]):
+                out["bullish"] = {
+                    "price_points": (p_last2.index[0], p_last2.index[-1]),
+                    "desc": "Bullish divergence (Price LL vs Indicator HL)"
+                }
     return out
 
 # =========================
@@ -822,6 +822,7 @@ def app():
 
         bdm = bandarmology_brief(base, period=30)
 
+        # ======= OUTPUT SECTION =======
         st.subheader("🎯 Hasil Analisis Cross-Confirmation")
         gauge = go.Figure(go.Indicator(
             mode="gauge+number+delta",
@@ -881,7 +882,6 @@ def app():
                       delta=f"OBV: {scores['obv'][0]:.2f}/{scores['obv'][1]:.2f} | ADX: {scores['adx'][0]:.2f}/{scores['adx'][1]:.2f}")
 
         st.subheader("🕵️ Bandarmology (Ringkas)")
-        bdm = bandarmology_brief(base, period=30)
         b1, b2, b3 = st.columns(3)
         with b1:
             st.write(f"Volume Spikes (5H): **{bdm['volume_spikes_5d']}**")
@@ -892,13 +892,7 @@ def app():
         with b3:
             st.write(f"MFI (last): **{bdm['mfi_last']}**")
             st.write(f"Value Area: **{fmt_rp(bdm['va_low'])} – {fmt_rp(bdm['va_high'])}**")
-
-        if float(base['Close'].iloc[-1]) > bdm['va_high']:
-            st.info("🚀 Harga **di atas** Value Area → bias bullish lanjutan.")
-        elif float(base['Close'].iloc[-1]) < bdm['va_low']:
-            st.warning("🔻 Harga **di bawah** Value Area → bias bearish lanjutan.")
-        else:
-            st.write("↔️ Harga **dalam** Value Area → konsolidasi.")
+            st.write("Status:", "📦 konsolidasi." if bdm['in_value_area'] else ("🚀 di atas VA" if last_close > bdm['va_high'] else "🔻 di bawah VA"))
 
         st.subheader("🧭 Divergence Detector (RSI & MACD)")
         div_rsi = detect_divergence(base['Close'], base['RSI'], lookback=120)
@@ -948,6 +942,42 @@ def app():
         fig = make_main_chart(base, sr, is_squeeze)
         st.plotly_chart(fig, use_container_width=True)
 
+        # Volume with spikes
+        st.subheader("📊 Volume & Spikes")
+        vol = as_series(base['Volume'])
+        vol_ma = vol.rolling(20).mean()
+        vol_std = vol.rolling(20).std().replace(0, 1e-9)
+        z = (vol - vol_ma) / vol_std
+        fig_v = go.Figure()
+        fig_v.add_trace(go.Bar(x=base.index, y=vol, name='Volume'))
+        fig_v.add_trace(go.Scatter(x=base.index, y=vol_ma, name='Volume MA20'))
+        sp_idx = base.index[z > 2.5]
+        fig_v.add_trace(go.Scatter(x=sp_idx, y=vol.reindex(sp_idx), mode='markers', name='Spike', marker=dict(size=8)))
+        fig_v.update_layout(height=260, template="plotly_white")
+        st.plotly_chart(fig_v, use_container_width=True)
+
+        # Volume Profile (20 Hari)
+        st.subheader("📊 Volume Profile (20 Hari)")
+        last = base.tail(20)
+        price_min, price_max = float(last['Low'].min()), float(last['High'].max())
+        bins = np.linspace(price_min, price_max, 21)
+        vol_profile = np.zeros(20)
+        for _, r in last.iterrows():
+            rng = r['High'] - r['Low']
+            if rng <= 0: continue
+            vpp = r['Volume'] / rng
+            for i in range(20):
+                lo, hi = bins[i], bins[i+1]
+                ol = max(lo, r['Low']); oh = min(hi, r['High'])
+                ov = max(0, oh - ol)
+                vol_profile[i] += ov * vpp
+        poc_idx = int(np.argmax(vol_profile))
+        poc_price = (bins[poc_idx] + bins[poc_idx+1]) / 2
+        fig_vp = go.Figure(go.Bar(x=bins[:-1], y=vol_profile, name="Volume Profile"))
+        fig_vp.add_vline(x=poc_price, line_dash="dash", line_color="red", annotation_text="POC")
+        st.plotly_chart(fig_vp, use_container_width=True)
+
+        # Backtest
         st.subheader("🧪 Backtest Ringkas (Composite Threshold)")
         bt_summary, comp_series = backtest_composite(base, threshold_long=0.4, threshold_short=-0.4, max_hold=20)
         if bt_summary["num_trades"] == 0:
