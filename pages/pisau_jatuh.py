@@ -1,3 +1,4 @@
+# pisau_jatuh_app.py
 import streamlit as st
 import pandas as pd
 import yfinance as yf
@@ -45,7 +46,6 @@ def _normalize_tz(df):
         else:
             df = df.tz_convert('Asia/Jakarta')
     except Exception:
-        # Jika gagal konversi, biarkan apa adanya
         pass
     return df
 
@@ -54,7 +54,6 @@ def get_stock_data(ticker, end_date):
     try:
         stock = yf.Ticker(f"{ticker}.JK")
         start_date = end_date - timedelta(days=90)
-        # yfinance end bersifat exclusive, jadi aman dipakai apa adanya
         data = stock.history(start=start_date.strftime('%Y-%m-%d'),
                              end=end_date.strftime('%Y-%m-%d'))
         data = _normalize_tz(data)
@@ -143,13 +142,15 @@ def find_confirmation_dates_for_ticker(ticker: str,
                                        lookback_days: int = 180,
                                        end_date: date = None) -> pd.DataFrame:
     """
-    Mencari semua kejadian pola (4 candle terakhir membentuk 'pisau jatuh' sesuai detect_pattern),
-    lalu mengembalikan tanggal konfirmasi = hari perdagangan ke-5 (bar berikutnya).
+    Cari semua kejadian pola (4 candle terakhir valid menurut detect_pattern),
+    lalu kembalikan Tanggal Konfirmasi = bar berikutnya (hari ke-5),
+    plus harga konfirmasi dan perbandingan dengan harga last close hari ini.
     """
     try:
         if end_date is None:
             end_date = datetime.today().date()
 
+        # 1) Data utama untuk deteksi pola (hingga end_date)
         start_date = end_date - timedelta(days=lookback_days)
         stock = yf.Ticker(f"{ticker}.JK")
         data = stock.history(
@@ -161,30 +162,46 @@ def find_confirmation_dates_for_ticker(ticker: str,
         if data is None or data.empty:
             return pd.DataFrame()
 
-        data = data.copy()
+        # 2) Harga last close "today" (hari perdagangan terakhir saat ini)
+        today = datetime.today().date()
+        today_hist = stock.history(
+            start=(today - timedelta(days=30)).strftime('%Y-%m-%d'),
+            end=(today + timedelta(days=1)).strftime('%Y-%m-%d')
+        )
+        today_hist = _normalize_tz(today_hist)
+        if today_hist is None or today_hist.empty:
+            last_close_today = np.nan
+            last_close_date  = None
+        else:
+            last_close_today = float(today_hist['Close'].iloc[-1])
+            last_close_date  = today_hist.index[-1].date()
 
-        # Iterasi rolling: untuk setiap index i (>=3) cek subset hingga i (agar MA20/MA50 di detect_pattern valid)
         confirmations = []
-        # batas terakhir adalah len(data)-2 (supaya i+1 ada untuk konfirmasi)
+        # iterasi i sebagai bar ke-4 (0-based), pastikan i+1 ada utk konfirmasi
         for i in range(3, len(data) - 1):
-            subset = data.iloc[:i + 1]  # data s.d. bar i
+            subset = data.iloc[:i + 1]
             if len(subset) >= 50 and detect_pattern(subset):
-                # C1..C4 = 4 bar terakhir di subset
-                c1_idx = subset.index[-4]
-                c2_idx = subset.index[-3]
-                c3_idx = subset.index[-2]
-                c4_idx = subset.index[-1]
-                confirm_idx = data.index[i + 1]  # bar berikutnya (hari ke-5)
+                confirm_idx = data.index[i + 1]  # hari ke-5
+                harga_konfirmasi = float(data.loc[confirm_idx, "Close"])
+
+                # perubahan dari konfirmasi ke harga today
+                if pd.notna(last_close_today):
+                    chg_rp = last_close_today - harga_konfirmasi
+                    chg_pct = (chg_rp / harga_konfirmasi) * 100 if harga_konfirmasi != 0 else np.nan
+                else:
+                    chg_rp = np.nan
+                    chg_pct = np.nan
+
+                days_since = (last_close_date - confirm_idx.date()).days if last_close_date else None
 
                 confirmations.append({
                     "Ticker": ticker,
-                    "C1 (Bull) Tgl": c1_idx.date(),
-                    "C2 Tgl": c2_idx.date(),
-                    "C3 Tgl": c3_idx.date(),
-                    "C4 Tgl": c4_idx.date(),
                     "Tgl Konfirmasi (Hari ke-5)": confirm_idx.date(),
-                    "Harga Konfirmasi (Close)": round(float(data.loc[confirm_idx, "Close"]), 2),
-                    "Volume Konfirmasi": int(data.loc[confirm_idx, "Volume"]),
+                    "Harga Konfirmasi (Close)": round(harga_konfirmasi, 2),
+                    "Harga Today (Last Close)": round(float(last_close_today), 2) if pd.notna(last_close_today) else None,
+                    "Perubahan (Rp)": round(float(chg_rp), 2) if pd.notna(chg_rp) else None,
+                    "Perubahan (%)": round(float(chg_pct), 2) if pd.notna(chg_pct) else None,
+                    "Hari sejak Konfirmasi": days_since
                 })
 
         return pd.DataFrame(confirmations)
@@ -221,7 +238,7 @@ def app():
 
         tickers = df['Ticker'].dropna().unique().tolist()
 
-        # Catatan: st.date_input mengembalikan datetime.date; konsistenkan ke date
+        # date_input mengembalikan datetime.date
         default_date = datetime.today().date()
         analysis_date = st.date_input("📅 Tanggal Analisis", value=default_date)
 
@@ -291,7 +308,7 @@ def app():
                 st.error("Mohon isi ticker terlebih dahulu.")
                 st.stop()
 
-            with st.spinner(f"Mencari pola & tanggal konfirmasi untuk {ticker_input}.JK ..."):
+            with st.spinner(f"Mencari tanggal konfirmasi untuk {ticker_input}.JK ..."):
                 df_conf = find_confirmation_dates_for_ticker(
                     ticker=ticker_input,
                     lookback_days=int(lookback_days),
@@ -302,21 +319,32 @@ def app():
                 st.info(f"Tidak ditemukan tanggal konfirmasi untuk {ticker_input}.JK dalam {lookback_days} hari ke belakang.")
             else:
                 st.success(f"Ditemukan {len(df_conf)} tanggal konfirmasi untuk {ticker_input}.JK")
-                # Urutkan berdasarkan tanggal konfirmasi terbaru ke lama
-                df_conf = df_conf.sort_values("Tgl Konfirmasi (Hari ke-5)", ascending=False).reset_index(drop=True)
-                st.dataframe(df_conf, use_container_width=True)
 
-                # Penjelasan singkat (sesuai contoh kasus HUMI 1–4 → 8)
+                # urutkan terbaru
+                df_conf = df_conf.sort_values("Tgl Konfirmasi (Hari ke-5)", ascending=False).reset_index(drop=True)
+
+                # kolom display tanpa C1–C4
+                display_cols = [
+                    "Ticker",
+                    "Tgl Konfirmasi (Hari ke-5)",
+                    "Harga Konfirmasi (Close)",
+                    "Harga Today (Last Close)",
+                    "Perubahan (Rp)",
+                    "Perubahan (%)",
+                    "Hari sejak Konfirmasi"
+                ]
+                st.dataframe(df_conf[display_cols], use_container_width=True)
+
                 st.caption(
-                    "Catatan: Pola terdeteksi bila 4 candle terakhir memenuhi kriteria. "
-                    "Tanggal konfirmasi adalah **hari perdagangan berikutnya** (hari ke-5). "
-                    "Jika ada libur/weekend (mis. 5–7 libur), maka konfirmasi jatuh pada tanggal perdagangan berikutnya (mis. tanggal 8)."
+                    "Tanggal konfirmasi adalah **hari perdagangan berikutnya** setelah 4 candle pola terbentuk "
+                    "(hari ke-5). *Harga Today (Last Close)* = harga penutupan **hari perdagangan terakhir saat ini**. "
+                    "Perubahan menunjukkan kenaikan/penurunan dari harga konfirmasi ke hari ini."
                 )
 
-                # Download hasil
+                # Download Excel
                 out2 = io.BytesIO()
                 with pd.ExcelWriter(out2, engine='openpyxl') as writer:
-                    df_conf.to_excel(writer, sheet_name=f'{ticker_input}_Konfirmasi', index=False)
+                    df_conf[display_cols].to_excel(writer, sheet_name=f'{ticker_input}_Konfirmasi', index=False)
                 st.download_button(
                     "📥 Unduh Hasil (Excel)",
                     data=out2.getvalue(),
