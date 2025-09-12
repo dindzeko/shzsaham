@@ -8,3 +8,4 @@ scipy
 openpyxl
 scikit-learn
 plotly
+arch
