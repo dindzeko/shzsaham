@@ -143,8 +143,10 @@ def find_confirmation_dates_for_ticker(ticker: str,
                                        end_date: date = None) -> pd.DataFrame:
     """
     Cari semua kejadian pola (4 candle terakhir valid menurut detect_pattern),
-    lalu kembalikan Tanggal Konfirmasi = bar berikutnya (hari ke-5),
-    plus harga konfirmasi dan perbandingan dengan harga last close hari ini.
+    lalu kembalikan:
+      - Tanggal Konfirmasi = bar berikutnya (hari ke-5)
+      - HARGA KONFIRMASI = harga penutupan C4 (candle ke-4)
+      - Perubahan = dari harga C4 ke harga last close hari ini
     """
     try:
         if end_date is None:
@@ -181,13 +183,14 @@ def find_confirmation_dates_for_ticker(ticker: str,
         for i in range(3, len(data) - 1):
             subset = data.iloc[:i + 1]
             if len(subset) >= 50 and detect_pattern(subset):
-                confirm_idx = data.index[i + 1]  # hari ke-5
-                harga_konfirmasi = float(data.loc[confirm_idx, "Close"])
+                c4_idx = data.index[i]       # C4 = bar ke-4
+                confirm_idx = data.index[i + 1]  # hari ke-5 (tanggal konfirmasi)
+                harga_c4 = float(data.loc[c4_idx, "Close"])  # harga konfirmasi = harga C4
 
-                # perubahan dari konfirmasi ke harga today
+                # perubahan dari C4 ke harga today
                 if pd.notna(last_close_today):
-                    chg_rp = last_close_today - harga_konfirmasi
-                    chg_pct = (chg_rp / harga_konfirmasi) * 100 if harga_konfirmasi != 0 else np.nan
+                    chg_rp = last_close_today - harga_c4
+                    chg_pct = (chg_rp / harga_c4) * 100 if harga_c4 != 0 else np.nan
                 else:
                     chg_rp = np.nan
                     chg_pct = np.nan
@@ -197,7 +200,7 @@ def find_confirmation_dates_for_ticker(ticker: str,
                 confirmations.append({
                     "Ticker": ticker,
                     "Tgl Konfirmasi (Hari ke-5)": confirm_idx.date(),
-                    "Harga Konfirmasi (Close)": round(harga_konfirmasi, 2),
+                    "Harga Konfirmasi (Close)": round(harga_c4, 2),  # ← harga C4
                     "Harga Today (Last Close)": round(float(last_close_today), 2) if pd.notna(last_close_today) else None,
                     "Perubahan (Rp)": round(float(chg_rp), 2) if pd.notna(chg_rp) else None,
                     "Perubahan (%)": round(float(chg_pct), 2) if pd.notna(chg_pct) else None,
@@ -238,7 +241,6 @@ def app():
 
         tickers = df['Ticker'].dropna().unique().tolist()
 
-        # date_input mengembalikan datetime.date
         default_date = datetime.today().date()
         analysis_date = st.date_input("📅 Tanggal Analisis", value=default_date)
 
@@ -323,11 +325,10 @@ def app():
                 # urutkan terbaru
                 df_conf = df_conf.sort_values("Tgl Konfirmasi (Hari ke-5)", ascending=False).reset_index(drop=True)
 
-                # kolom display tanpa C1–C4
                 display_cols = [
                     "Ticker",
                     "Tgl Konfirmasi (Hari ke-5)",
-                    "Harga Konfirmasi (Close)",
+                    "Harga Candle ke-4",   # ini = harga C4
                     "Harga Today (Last Close)",
                     "Perubahan (Rp)",
                     "Perubahan (%)",
@@ -336,9 +337,9 @@ def app():
                 st.dataframe(df_conf[display_cols], use_container_width=True)
 
                 st.caption(
-                    "Tanggal konfirmasi adalah **hari perdagangan berikutnya** setelah 4 candle pola terbentuk "
-                    "(hari ke-5). *Harga Today (Last Close)* = harga penutupan **hari perdagangan terakhir saat ini**. "
-                    "Perubahan menunjukkan kenaikan/penurunan dari harga konfirmasi ke hari ini."
+                    "Tanggal konfirmasi = **hari perdagangan berikutnya** (hari ke-5). "
+                    "**Harga Konfirmasi (Close)** = **harga penutupan candle ke-4 (C4)**. "
+                    "Perubahan dihitung dari harga C4 ke harga penutupan hari perdagangan terakhir saat ini."
                 )
 
                 # Download Excel
