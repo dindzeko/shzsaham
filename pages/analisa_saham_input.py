@@ -36,7 +36,6 @@ def lot_to_shares(lot: float) -> int:
     return int(lot * 100)
 
 def get_idx_tick(price: float) -> int:
-    """Tick size aturan IDX (disederhanakan & umum dipakai)"""
     if price < 200: return 1
     if price < 500: return 2
     if price < 2000: return 5
@@ -47,13 +46,37 @@ def round_to_tick(price: float) -> float:
     tick = get_idx_tick(price)
     return round(price / tick) * tick
 
+def as_series(obj: pd.Series | pd.DataFrame) -> pd.Series:
+    """
+    Paksa 1D Series.
+    - DataFrame 1 kolom -> squeeze jadi Series.
+    - Coerce ke float bila memungkinkan.
+    """
+    if isinstance(obj, pd.DataFrame):
+        s = obj.squeeze("columns")
+    else:
+        s = obj
+    if not isinstance(s, pd.Series):
+        s = pd.Series(s)
+    # pastikan numeric bila memungkinkan
+    try:
+        s = pd.to_numeric(s, errors="ignore")
+    except Exception:
+        pass
+    return s
+
 # =========================
 # DATA FETCH (dengan cache)
 # =========================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_history_yf(ticker_jk: str, start: datetime, end: datetime) -> pd.DataFrame:
-    df = yf.download(ticker_jk, start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d"),
-                     auto_adjust=False, progress=False)
+    df = yf.download(
+        ticker_jk,
+        start=start.strftime("%Y-%m-%d"),
+        end=end.strftime("%Y-%m-%d"),
+        auto_adjust=False,
+        progress=False,
+    )
     return df
 
 def resolve_ticker(user_input: str) -> str:
@@ -66,10 +89,11 @@ def resolve_ticker(user_input: str) -> str:
 # INDIKATOR TEKNIKAL
 # =========================
 def rma(series: pd.Series, period: int) -> pd.Series:
+    series = as_series(series)
     return series.ewm(alpha=1/period, adjust=False).mean()
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-    """RSI Wilder smoothing (praktik standar)"""
+    close = as_series(close)
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -80,7 +104,6 @@ def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
     return rsi.fillna(50)
 
 def compute_mfi_corrected(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    """MFI dengan typical price vs hari sebelumnya + guard divide-by-zero"""
     tp = (df['High'] + df['Low'] + df['Close']) / 3
     money_flow = tp * df['Volume']
     pos_flow = money_flow.where(tp > tp.shift(1), 0.0)
@@ -89,17 +112,19 @@ def compute_mfi_corrected(df: pd.DataFrame, period: int = 14) -> pd.Series:
     neg = neg_flow.rolling(period, min_periods=1).sum().replace(0, np.nan)
     ratio = pos / neg
     mfi = 100 - (100 / (1 + ratio))
-    return mfi.fillna(50)
+    return as_series(mfi).fillna(50)
 
 def compute_macd(close: pd.Series, fast=12, slow=26, signal=9):
+    close = as_series(close)
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
     macd = ema_fast - ema_slow
     sig = macd.ewm(span=signal, adjust=False).mean()
     hist = macd - sig
-    return macd, sig, hist
+    return as_series(macd), as_series(sig), as_series(hist)
 
 def compute_bollinger_bands(close: pd.Series, window=20, num_std=2):
+    close = as_series(close)
     sma = close.rolling(window).mean()
     std = close.rolling(window).std()
     upper = sma + num_std * std
@@ -108,9 +133,10 @@ def compute_bollinger_bands(close: pd.Series, window=20, num_std=2):
     bandwidth = width / sma.replace(0, np.nan)
     percent_b = (close - lower) / width.replace(0, np.nan)
     percent_b = percent_b.clip(0, 1)
-    return upper, sma, lower, bandwidth.fillna(0), percent_b.fillna(0)
+    return as_series(upper), as_series(sma), as_series(lower), as_series(bandwidth).fillna(0), as_series(percent_b).fillna(0)
 
 def compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
+    high, low, close = as_series(high), as_series(low), as_series(close)
     tr = pd.concat([
         (high - low),
         (high - close.shift(1)).abs(),
@@ -119,11 +145,13 @@ def compute_atr(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
     return rma(tr, period)
 
 def compute_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
+    close, volume = as_series(close), as_series(volume)
     change = np.sign(close.diff().fillna(0))
     obv = (volume * change).cumsum()
-    return obv.fillna(0)
+    return as_series(obv).fillna(0)
 
 def compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
+    high, low, close = as_series(high), as_series(low), as_series(close)
     up = high.diff()
     down = -low.diff()
     plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=high.index)
@@ -140,27 +168,28 @@ def compute_adx(high: pd.Series, low: pd.Series, close: pd.Series, period=14):
     minus_di = 100 * rma(minus_dm, period) / atr
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
     adx = rma(dx, period)
-    return adx.fillna(0), plus_di.fillna(0), minus_di.fillna(0)
+    return as_series(adx).fillna(0), as_series(plus_di).fillna(0), as_series(minus_di).fillna(0)
 
 def compute_vwap(high, low, close, volume):
+    high, low, close, volume = as_series(high), as_series(low), as_series(close), as_series(volume)
     tp = (high + low + close) / 3
     cum_v = volume.cumsum().replace(0, np.nan)
     vwap = (tp * volume).cumsum() / cum_v
-    return vwap.fillna(method="bfill").fillna(method="ffill")
+    return as_series(vwap).fillna(method="bfill").fillna(method="ffill")
 
 def compute_adl(high, low, close, volume):
+    high, low, close, volume = as_series(high), as_series(low), as_series(close), as_series(volume)
     mfm = ((close - low) - (high - close)) / (high - low).replace(0, np.nan)
     mfm = mfm.replace([np.inf, -np.inf], 0).fillna(0)
     mfv = mfm * volume
-    return mfv.cumsum()
+    return as_series(mfv.cumsum())
 
 # =========================
 # S/R & FIBONACCI
 # =========================
 def identify_swings(df: pd.DataFrame, window: int = 60) -> tuple[float, float]:
-    """Ambil swing high/low sederhana dari 60 bar terakhir."""
     last = df.tail(window)
-    return last['High'].max(), last['Low'].min()
+    return float(last['High'].max()), float(last['Low'].min())
 
 def fibonacci_levels(swing_high: float, swing_low: float) -> dict:
     diff = swing_high - swing_low
@@ -176,10 +205,9 @@ def fibonacci_levels(swing_high: float, swing_low: float) -> dict:
 
 def psych_level(close_price: float) -> float:
     levels = [50, 100, 200, 500, 1000, 2000, 5000, 10000]
-    return min(levels, key=lambda x: abs(x - close_price))
+    return float(min(levels, key=lambda x: abs(x - close_price)))
 
 def cluster_levels(levels, tol=0.01):
-    """Cluster level yang berdekatan (±1%) lalu beri skor konfluensi."""
     if not levels: return []
     levels = sorted(levels)
     clusters, cluster = [], [levels[0]]
@@ -189,7 +217,6 @@ def cluster_levels(levels, tol=0.01):
         else:
             clusters.append(cluster); cluster = [x]
     clusters.append(cluster)
-    # median cluster & skor = jumlah sumber level
     out = []
     for c in clusters:
         out.append((float(np.median(c)), len(c)))
@@ -197,23 +224,23 @@ def cluster_levels(levels, tol=0.01):
     return out
 
 def compute_support_resistance(df: pd.DataFrame) -> dict:
-    close = df['Close'].iloc[-1]
+    close = float(df['Close'].iloc[-1])
     swing_high, swing_low = identify_swings(df, 60)
     fib = fibonacci_levels(swing_high, swing_low)
-    ma20, ma50, ma100 = df['Close'].rolling(20).mean().iloc[-1], df['Close'].rolling(50).mean().iloc[-1], df['Close'].rolling(100).mean().iloc[-1]
-    vwap = compute_vwap(df['High'], df['Low'], df['Close'], df['Volume']).iloc[-1]
+    ma20 = float(df['Close'].rolling(20).mean().iloc[-1])
+    ma50 = float(df['Close'].rolling(50).mean().iloc[-1])
+    ma100 = float(df['Close'].rolling(100).mean().iloc[-1])
+    vwap = float(compute_vwap(df['High'], df['Low'], df['Close'], df['Volume']).iloc[-1])
     psych = psych_level(close)
 
-    candidates = [
-        fib['Fib_0.236'], fib['Fib_0.382'], fib['Fib_0.5'], fib['Fib_0.618'], fib['Fib_0.786'], fib['Fib_0.0'], fib['Fib_1.0'],
-        ma20, ma50, ma100, vwap, psych
-    ]
+    candidates = [fib['Fib_0.236'], fib['Fib_0.382'], fib['Fib_0.5'], fib['Fib_0.618'], fib['Fib_0.786'],
+                  fib['Fib_0.0'], fib['Fib_1.0'], ma20, ma50, ma100, vwap, psych]
     candidates = [c for c in candidates if np.isfinite(c)]
 
-    clustered = cluster_levels(candidates, tol=0.01)  # (level, score)
+    clustered = cluster_levels(candidates, tol=0.01)
 
-    supports = [lvl for (lvl, sc) in clustered if lvl < close]
-    resistances = [lvl for (lvl, sc) in clustered if lvl > close]
+    supports = [lvl for (lvl, _) in clustered if lvl < close]
+    resistances = [lvl for (lvl, _) in clustered if lvl > close]
 
     supports = sorted(supports, reverse=True)[:3] if supports else [close * 0.95]
     resistances = sorted(resistances)[:3] if resistances else [close * 1.05]
@@ -229,14 +256,17 @@ class IndicatorScoringSystem:
 
     @staticmethod
     def _trend(values: pd.Series, period: int) -> float:
-        if len(values) < max(3, period): return 0.0
-        x = np.arange(period)
-        y = values.iloc[-period:].values
+        s = as_series(values).dropna()
+        if len(s) < max(3, period): return 0.0
+        y = s.iloc[-period:].to_numpy(dtype=float).ravel()  # <-- pastikan 1D
+        if y.size < 2: return 0.0
+        x = np.arange(y.size, dtype=float)
         slope, _, _, _, _ = stats.linregress(x, y)
-        mean = np.mean(y) if np.mean(y) != 0 else 1e-9
-        return slope / mean
+        mean = float(np.mean(y)) if np.mean(y) != 0 else 1e-9
+        return float(slope / mean)
 
     def score_rsi(self, rsi: pd.Series):
+        rsi = as_series(rsi)
         r = float(rsi.iloc[-1])
         if r <= 30: score, strg = 1.0, min(1.0, (30 - r) / 30)
         elif r <= 40: score, strg = 0.5, (40 - r) / 10
@@ -250,6 +280,7 @@ class IndicatorScoringSystem:
         return score, float(strg)
 
     def score_macd(self, macd_line, signal_line, histogram):
+        macd_line, signal_line, histogram = as_series(macd_line), as_series(signal_line), as_series(histogram)
         cross = 1.0 if macd_line.iloc[-1] > signal_line.iloc[-1] else -1.0
         hist_trend = self._trend(histogram, 5)
         if hist_trend > 0: hscore, hstr = 0.5, min(1.0, hist_trend*2)
@@ -258,12 +289,10 @@ class IndicatorScoringSystem:
         return cross, 1.0, hscore, float(hstr)
 
     def score_boll(self, close, upper, lower, pct_b, bandwidth):
+        pct_b, bandwidth = as_series(pct_b), as_series(bandwidth)
         cb = float(pct_b.iloc[-1]); bw = float(bandwidth.iloc[-1])
         hist_bw = bandwidth.iloc[-120:].dropna()
-        if len(hist_bw) < 10:
-            bw_pct = 0.5
-        else:
-            bw_pct = stats.percentileofscore(hist_bw, bw) / 100.0
+        bw_pct = 0.5 if len(hist_bw) < 10 else stats.percentileofscore(hist_bw.to_numpy().ravel(), bw) / 100.0
         is_squeeze = bw_pct < 0.2
         if cb > 0.8: score, strg = -1.0, min(1.0, (cb - 0.8)/0.2)
         elif cb < 0.2: score, strg = 1.0, min(1.0, (0.2 - cb)/0.2)
@@ -273,6 +302,7 @@ class IndicatorScoringSystem:
         return score, float(strg), bool(is_squeeze)
 
     def score_volume(self, vol: pd.Series, vol_ma: pd.Series, price_change_pct: float):
+        vol, vol_ma = as_series(vol), as_series(vol_ma)
         eps = 1e-9
         ratio = float(vol.iloc[-1] / max(vol_ma.iloc[-1], eps))
         if ratio > 1.7 and price_change_pct > 0:
@@ -288,12 +318,14 @@ class IndicatorScoringSystem:
         return score, float(max(0.0, min(strg, 1.0)))
 
     def score_obv(self, obv: pd.Series):
+        obv = as_series(obv)
         t = self._trend(obv, 10)
         if t > 0.05: return 1.0, min(1.0, t*5)
         if t < -0.05: return -1.0, min(1.0, abs(t)*5)
         return 0.0, 0.0
 
     def score_adx(self, adx: pd.Series, plus_di: pd.Series, minus_di: pd.Series, threshold=25):
+        adx, plus_di, minus_di = as_series(adx), as_series(plus_di), as_series(minus_di)
         cur_adx, pdi, mdi = float(adx.iloc[-1]), float(plus_di.iloc[-1]), float(minus_di.iloc[-1])
         if cur_adx < threshold: return 0.0, 0.0
         direction = 1.0 if pdi > mdi else -1.0
@@ -339,20 +371,20 @@ class BreakoutDetector:
         self.min_buffer_pct = min_buffer_pct
 
     def _dynamic_buffer(self, df: pd.DataFrame) -> float:
-        atr = compute_atr(df['High'], df['Low'], df['Close'], self.atr_period).iloc[-1]
-        close = df['Close'].iloc[-1]
+        atr = float(compute_atr(df['High'], df['Low'], df['Close'], self.atr_period).iloc[-1])
+        close = float(df['Close'].iloc[-1])
         atr_buf = (atr / max(close, 1e-9)) * 0.5
         return max(self.min_buffer_pct, float(atr_buf))
 
     def detect(self, df, res_level: float, sup_level: float, bars_confirm: int = 1):
-        close = df['Close']
-        vol = df['Volume']
+        close = as_series(df['Close'])
+        vol = as_series(df['Volume'])
         buffer = self._dynamic_buffer(df)
-        avg_vol = vol.rolling(20).mean().iloc[-1]
-        vol_ok = vol.iloc[-1] > 1.5 * max(avg_vol, 1e-9)
+        avg_vol = float(vol.rolling(20).mean().iloc[-1])
+        vol_ok = float(vol.iloc[-1]) > 1.5 * max(avg_vol, 1e-9)
 
-        res_break = (close.iloc[-1] > res_level * (1 + buffer))
-        sup_break = (close.iloc[-1] < sup_level * (1 - buffer))
+        res_break = float(close.iloc[-1]) > res_level * (1 + buffer)
+        sup_break = float(close.iloc[-1]) < sup_level * (1 - buffer)
 
         def confirm(level, direction):
             if bars_confirm <= 1: return True
@@ -374,7 +406,7 @@ class BreakoutDetector:
         return lots * 100
 
     def plan(self, df, breakout_type: str, level: float, buffer: float, account_size: float, risk_percent: float):
-        atr = compute_atr(df['High'], df['Low'], df['Close'], self.atr_period).iloc[-1]
+        atr = float(compute_atr(df['High'], df['Low'], df['Close'], self.atr_period).iloc[-1])
         if breakout_type == "resistance":
             entry = round_to_tick(level * (1 + buffer))
             stop = round_to_tick(entry - 2 * atr)
@@ -397,13 +429,14 @@ class BreakoutDetector:
 # =========================
 def bandarmology_brief(df: pd.DataFrame, period: int = 30) -> dict:
     out = {}
-    vol_ma = df['Volume'].rolling(20).mean()
-    vol_std = df['Volume'].rolling(20).std().replace(0, 1e-9)
-    z = (df['Volume'] - vol_ma) / vol_std
+    vol = as_series(df['Volume'])
+    vol_ma = vol.rolling(20).mean()
+    vol_std = vol.rolling(20).std().replace(0, 1e-9)
+    z = (vol - vol_ma) / vol_std
     out['volume_spikes_5d'] = int((z.iloc[-5:] > 2.5).sum())
 
-    price_chg = df['Close'].pct_change()
-    vol_chg = df['Volume'].pct_change()
+    price_chg = as_series(df['Close']).pct_change()
+    vol_chg = vol.pct_change()
     pos = ((price_chg > 0) & (vol_chg > 0)).iloc[-period:].sum()
     neg = ((price_chg < 0) & (vol_chg > 0)).iloc[-period:].sum()
     out['pos_volume_price_days'] = int(pos)
@@ -414,16 +447,16 @@ def bandarmology_brief(df: pd.DataFrame, period: int = 30) -> dict:
     mfi = compute_mfi_corrected(df, 14)
 
     def pct_change_last(s: pd.Series, n=5):
+        s = as_series(s)
         if len(s) <= n or s.iloc[-n] == 0: return 0.0
         return float((s.iloc[-1] - s.iloc[-n]) / abs(s.iloc[-n]) * 100)
 
     out['adl_5d_pct'] = round(pct_change_last(adl, 5), 2)
     out['obv_5d_pct'] = round(pct_change_last(obv, 5), 2)
-    out['mfi_last'] = round(float(mfi.iloc[-1]), 2)
+    out['mfi_last'] = round(float(as_series(mfi).iloc[-1]), 2)
 
-    # Volume profile sederhana 20 bar
     last = df.tail(20)
-    price_min, price_max = last['Low'].min(), last['High'].max()
+    price_min, price_max = float(last['Low'].min()), float(last['High'].max())
     bins = np.linspace(price_min, price_max, 21)
     vol_profile = np.zeros(20)
     for _, r in last.iterrows():
@@ -450,75 +483,54 @@ def bandarmology_brief(df: pd.DataFrame, period: int = 30) -> dict:
     out['poc'] = float(poc_price)
     out['va_low'] = float(va_low)
     out['va_high'] = float(va_high)
-    out['in_value_area'] = (df['Close'].iloc[-1] >= va_low) and (df['Close'].iloc[-1] <= va_high)
+    out['in_value_area'] = (float(df['Close'].iloc[-1]) >= va_low) and (float(df['Close'].iloc[-1]) <= va_high)
     return out
 
 # =========================
-# DIVERGENCE DETECTOR (BARU)
+# DIVERGENCE DETECTOR
 # =========================
 def _local_peaks_troughs(series: pd.Series):
-    """Deteksi puncak/lembah sederhana: bandingkan dengan tetangga kiri-kanan."""
-    peaks = (series.shift(1) < series) & (series.shift(-1) < series)
-    troughs = (series.shift(1) > series) & (series.shift(-1) > series)
-    return series[peaks], series[troughs]
+    s = as_series(series)
+    peaks = (s.shift(1) < s) & (s.shift(-1) < s)
+    troughs = (s.shift(1) > s) & (s.shift(-1) > s)
+    return s[peaks], s[troughs]
 
 def detect_divergence(price: pd.Series, indicator: pd.Series, lookback: int = 120) -> dict:
-    """
-    Mendeteksi divergensi bullish/bearish sederhana dalam lookback terakhir.
-    - Bearish divergence: harga HH, indikator LH.
-    - Bullish divergence: harga LL, indikator HL.
-    Return contoh paling terbaru jika ada.
-    """
-    p = price.tail(lookback)
-    i = indicator.reindex(p.index).fillna(method="ffill")
+    p = as_series(price).tail(lookback)
+    i = as_series(indicator).reindex(p.index).ffill()
     p_peaks, p_troughs = _local_peaks_troughs(p)
     i_peaks, i_troughs = _local_peaks_troughs(i)
 
     out = {"bearish": None, "bullish": None}
 
-    # Cari dua puncak terakhir (harga & indikator)
     if len(p_peaks) >= 2 and len(i_peaks) >= 2:
         p_last2 = p_peaks.iloc[-2:]
         i_last2 = i_peaks.loc[p_last2.index].dropna()
-        if len(i_last2) == 2:
-            # Harga HH? Indikator LH?
-            if p_last2.iloc[-1] > p_last2.iloc[0] and i_last2.iloc[-1] < i_last2.iloc[0]:
-                out["bearish"] = {
-                    "price_points": (p_last2.index[0], p_last2.index[-1]),
-                    "indicator_points": (i_last2.index[0], i_last2.index[-1]),
-                    "desc": "Bearish divergence (Price HH vs Indicator LH)"
-                }
+        if len(i_last2) == 2 and (p_last2.iloc[-1] > p_last2.iloc[0]) and (i_last2.iloc[-1] < i_last2.iloc[0]):
+            out["bearish"] = {
+                "price_points": (p_last2.index[0], p_last2.index[-1]),
+                "indicator_points": (i_last2.index[0], i_last2.index[-1]),
+                "desc": "Bearish divergence (Price HH vs Indicator LH)"
+            }
 
-    # Cari dua lembah terakhir (harga & indikator)
     if len(p_troughs) >= 2 and len(i_troughs) >= 2:
         p_last2 = p_troughs.iloc[-2:]
         i_last2 = i_troughs.loc[p_last2.index].dropna()
-        if len(i_last2) == 2:
-            # Harga LL? Indikator HL?
-            if p_last2.iloc[-1] < p_last2.iloc[0] and i_last2.iloc[-1] > i_last2.iloc[0]:
-                out["bullish"] = {
-                    "price_points": (p_last2.index[0], p_last2.index[-1]),
-                    "indicator_points": (i_last2.index[0], i_last2.index[-1]),
-                    "desc": "Bullish divergence (Price LL vs Indicator HL)"
-                }
+        if len(i_last2) == 2 and (p_last2.iloc[-1] < p_last2.iloc[0]) and (i_last2.iloc[-1] > i_last2.iloc[0]):
+            out["bullish"] = {
+                "price_points": (p_last2.index[0], p_last2.index[-1]),
+                "indicator_points": (i_last2.index[0], i_last2.index[-1]),
+                "desc": "Bullish divergence (Price LL vs Indicator HL)"
+            }
     return out
 
 # =========================
-# RETEST LOGIC SETELAH BREAKOUT (BARU)
+# RETEST LOGIC
 # =========================
 def assess_retest(df: pd.DataFrame, level: float, direction: str, buffer_pct: float, lookback: int = 10) -> str:
-    """
-    Menilai apakah terjadi retest terhadap level setelah breakout.
-    - direction: 'up' untuk breakout ke atas, 'down' untuk breakdown.
-    - Kriteria sederhana:
-      * 'Retested and held' jika low (untuk up) atau high (untuk down) menyentuh ±30% buffer di 1..lookback bar
-        lalu harga kembali sesuai arah (close > level untuk up, close < level untuk down).
-      * 'Retest happening' jika harga saat ini berada dekat level ±30% buffer.
-      * 'No retest' jika tidak ada kondisi di atas.
-    """
     if len(df) < 5: return "No data"
     recent = df.tail(lookback)
-    band = level * (0.3 * buffer_pct)  # toleransi 30% dari buffer breakout
+    band = level * (0.3 * buffer_pct)
     if direction == "up":
         touched = ((recent['Low'] >= level - band) & (recent['Low'] <= level + band)).any()
         near_now = (df['Close'].iloc[-1] >= level - band) and (df['Close'].iloc[-1] <= level + band)
@@ -533,13 +545,13 @@ def assess_retest(df: pd.DataFrame, level: float, direction: str, buffer_pct: fl
         return "No retest"
 
 # =========================
-# BACKTEST RINGKAS EXPECTANCY (BARU)
+# BACKTEST RINGKAS
 # =========================
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
-    d['MA20'] = d['Close'].rolling(20).mean()
-    d['MA50'] = d['Close'].rolling(50).mean()
-    d['MA100'] = d['Close'].rolling(100).mean()
+    d['MA20'] = as_series(d['Close']).rolling(20).mean()
+    d['MA50'] = as_series(d['Close']).rolling(50).mean()
+    d['MA100'] = as_series(d['Close']).rolling(100).mean()
     d['RSI'] = compute_rsi(d['Close'], 14)
     d['MACD'], d['Signal'], d['Hist'] = compute_macd(d['Close'], 12, 26, 9)
     d['BB_Upper'], d['BB_Middle'], d['BB_Lower'], d['BB_BW'], d['BB_%B'] = compute_bollinger_bands(d['Close'], 20, 2)
@@ -548,22 +560,14 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d['ADX'], d['Plus_DI'], d['Minus_DI'] = compute_adx(d['High'], d['Low'], d['Close'], 14)
     d['VWAP'] = compute_vwap(d['High'], d['Low'], d['Close'], d['Volume'])
     d['MFI'] = compute_mfi_corrected(d, 14)
-    d['Volume_MA20'] = d['Volume'].rolling(20).mean()
+    d['Volume_MA20'] = as_series(d['Volume']).rolling(20).mean()
     return d
 
 def backtest_composite(df: pd.DataFrame, threshold_long=0.4, threshold_short=-0.4, max_hold=20):
-    """
-    Backtest sangat ringkas:
-    - Entry Long saat composite menyilang naik > 0.4; Stop = 2*ATR di bawah; Target = 2*ATR di atas.
-    - Entry Short saat composite menyilang turun < -0.4; Stop = 2*ATR di atas; Target = 2*ATR di bawah.
-    - Exit saat Stop/Target tercapai, atau composite kembali netral (<=0 untuk long, >=0 untuk short), atau timeout max_hold bar.
-    - Hitung R per trade dan expectancy.
-    """
     scorer = IndicatorScoringSystem()
-    # Pra-hitung skor tiap bar
     comp = []
     for idx in range(len(df)):
-        if idx < 100:  # need warmup for indicators
+        if idx < 100:
             comp.append(0.0); continue
         window = df.iloc[:idx+1]
         scores = {}
@@ -574,7 +578,8 @@ def backtest_composite(df: pd.DataFrame, threshold_long=0.4, threshold_short=-0.
         bsc, bst, _ = scorer.score_boll(window['Close'], window['BB_Upper'], window['BB_Lower'],
                                         window['BB_%B'], window['BB_BW'])
         scores['bollinger'] = (bsc, bst)
-        price_chg_pct = float((window['Close'].iloc[-1] - window['Close'].iloc[-2]) / max(window['Close'].iloc[-2], 1e-9) * 100)
+        price_chg_pct = float((window['Close'].iloc[-1] - window['Close'].iloc[-2]) /
+                              max(window['Close'].iloc[-2], 1e-9) * 100)
         vsc, vst = scorer.score_volume(window['Volume'], window['Volume_MA20'], price_chg_pct)
         scores['volume'] = (vsc, vst)
         os, ost = scorer.score_obv(window['OBV'])
@@ -587,44 +592,35 @@ def backtest_composite(df: pd.DataFrame, threshold_long=0.4, threshold_short=-0.
     trades = []
     i = 101
     while i < len(df):
-        price = df['Close'].iloc[i]
-        atr = df['ATR'].iloc[i]
-        # Crossover rules
+        price = float(df['Close'].iloc[i])
+        atr = float(df['ATR'].iloc[i])
         enter_long = comp.iloc[i-1] <= threshold_long and comp.iloc[i] > threshold_long
         enter_short = comp.iloc[i-1] >= threshold_short and comp.iloc[i] < threshold_short
         if enter_long:
-            entry = price
-            stop = entry - 2*atr
-            target = entry + 2*atr
-            stop_dist = entry - stop
-            j = i+1
-            exit_price, reason = None, None
+            entry = price; stop = entry - 2*atr; target = entry + 2*atr
+            stop_dist = entry - stop; j = i+1; exit_price = None; reason = None
             while j < min(i+max_hold, len(df)):
-                high = df['High'].iloc[j]; low = df['Low'].iloc[j]; cl = df['Close'].iloc[j]
+                high = float(df['High'].iloc[j]); low = float(df['Low'].iloc[j]); cl = float(df['Close'].iloc[j])
                 if low <= stop: exit_price, reason = stop, "Stop"; break
                 if high >= target: exit_price, reason = target, "Target"; break
                 if comp.iloc[j] <= 0: exit_price, reason = cl, "NeutralExit"; break
                 j += 1
             if exit_price is None:
-                exit_price, reason = df['Close'].iloc[min(i+max_hold-1, len(df)-1)], "Timeout"
+                exit_price, reason = float(df['Close'].iloc[min(i+max_hold-1, len(df)-1)]), "Timeout"
             R = (exit_price - entry) / max(stop_dist, 1e-9)
             trades.append({"dir":"Long","entry_i":i,"exit_i":j,"R":R,"reason":reason})
             i = j + 1
         elif enter_short:
-            entry = price
-            stop = entry + 2*atr
-            target = entry - 2*atr
-            stop_dist = stop - entry
-            j = i+1
-            exit_price, reason = None, None
+            entry = price; stop = entry + 2*atr; target = entry - 2*atr
+            stop_dist = stop - entry; j = i+1; exit_price = None; reason = None
             while j < min(i+max_hold, len(df)):
-                high = df['High'].iloc[j]; low = df['Low'].iloc[j]; cl = df['Close'].iloc[j]
+                high = float(df['High'].iloc[j]); low = float(df['Low'].iloc[j]); cl = float(df['Close'].iloc[j])
                 if high >= stop: exit_price, reason = stop, "Stop"; break
                 if low <= target: exit_price, reason = target, "Target"; break
                 if comp.iloc[j] >= 0: exit_price, reason = cl, "NeutralExit"; break
                 j += 1
             if exit_price is None:
-                exit_price, reason = df['Close'].iloc[min(i+max_hold-1, len(df)-1)], "Timeout"
+                exit_price, reason = float(df['Close'].iloc[min(i+max_hold-1, len(df)-1)]), "Timeout"
             R = (entry - exit_price) / max(stop_dist, 1e-9)
             trades.append({"dir":"Short","entry_i":i,"exit_i":j,"R":R,"reason":reason})
             i = j + 1
@@ -659,12 +655,11 @@ def make_main_chart(df: pd.DataFrame, sr: dict, is_squeeze: bool) -> go.Figure:
     ]:
         fig.add_trace(go.Scatter(x=df.index, y=df[col], mode='lines', name=name, line=dict(color=color, width=1.5)))
 
-    # Bollinger
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], name="BB Upper", mode="lines", line=dict(color="red", width=1, dash="dot")))
     fig.add_trace(go.Scatter(x=df.index, y=df['BB_Middle'], name="BB Middle", mode="lines", line=dict(color="purple", width=1.2)))
-    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], name="BB Lower", mode="lines", line=dict(color="green", width=1, dash="dot"), fill='tonexty', fillcolor='rgba(173,216,230,0.1)'))
+    fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], name="BB Lower", mode="lines", line=dict(color="green", width=1, dash="dot"),
+                             fill='tonexty', fillcolor='rgba(173,216,230,0.1)'))
 
-    # S/R
     for i, lvl in enumerate(sr['Support']):
         fig.add_hline(y=lvl, line_dash="dash", line_color="green",
                       annotation_text=f"Support {i+1}: {fmt_rp(lvl)}", annotation_position="bottom right")
@@ -703,25 +698,21 @@ def app():
 
     if st.button("🚀 Mulai Analisis"):
         if not ticker_in:
-            st.warning("Masukkan kode saham terlebih dahulu.")
-            return
+            st.warning("Masukkan kode saham terlebih dahulu."); return
 
-        ticker = resolve_ticker(ticker_in)  # tambah .JK jika belum
-        end = datetime.combine(analysis_date, datetime.min.time()) + timedelta(days=1)  # inclusive date
-        start = end - timedelta(days=365)  # 1 tahun
+        ticker = resolve_ticker(ticker_in)
+        end = datetime.combine(analysis_date, datetime.min.time()) + timedelta(days=1)
+        start = end - timedelta(days=365)
         df = fetch_history_yf(ticker, start, end)
 
         if df is None or df.empty:
-            st.warning("Data tidak tersedia. Coba tanggal lain atau kode lain.")
-            return
+            st.warning("Data tidak tersedia. Coba tanggal lain atau kode lain."); return
 
         last_dt = df.index[-1]
         st.caption(f"Data terakhir per: **{last_dt.date()}**")
 
-        # Indikator lengkap
         base = compute_all_indicators(df)
 
-        # Multi-timeframe bias (weekly sederhana)
         weekly_bias = 0
         if use_mtf:
             start_w = start - timedelta(days=100)
@@ -730,12 +721,10 @@ def app():
                 w = dfw.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
                 if len(w) >= 30:
                     macd_w, sig_w, _ = compute_macd(w['Close'])
-                    weekly_bias = 1 if macd_w.iloc[-1] > sig_w.iloc[-1] else -1
+                    weekly_bias = 1 if float(macd_w.iloc[-1]) > float(sig_w.iloc[-1]) else -1
 
-        # Support / Resistance
         sr = compute_support_resistance(base)
 
-        # Scoring
         scorer = IndicatorScoringSystem()
         scores = {}
         scores['rsi'] = scorer.score_rsi(base['RSI'])
@@ -758,10 +747,9 @@ def app():
         confidence = scorer.confidence(composite, scores)
         interp = scorer.interpret(composite)
 
-        # Breakout detector (+ retest)
         detector = BreakoutDetector()
-        res_lvl = sr['Resistance'][0] if sr['Resistance'] else base['Close'].iloc[-1] * 1.05
-        sup_lvl = sr['Support'][0] if sr['Support'] else base['Close'].iloc[-1] * 0.95
+        res_lvl = sr['Resistance'][0] if sr['Resistance'] else float(base['Close'].iloc[-1]) * 1.05
+        sup_lvl = sr['Support'][0] if sr['Support'] else float(base['Close'].iloc[-1]) * 0.95
         res_ok, sup_ok, vol_ok, buffer = detector.detect(base, res_lvl, sup_lvl, bars_confirm=1)
         retest_status = "N/A"
         if res_ok:
@@ -769,30 +757,23 @@ def app():
         elif sup_ok:
             retest_status = assess_retest(base, sup_lvl, "down", buffer, lookback=10)
 
-        # Bandarmology ringkas
         bdm = bandarmology_brief(base, period=30)
 
-        # ---------------- UI: SCORE GAUGE ----------------
         st.subheader("🎯 Hasil Analisis Cross-Confirmation")
         gauge = go.Figure(go.Indicator(
             mode="gauge+number+delta",
             value=composite, delta={'reference': 0},
-            gauge={
-                'axis': {'range': [-1, 1]},
-                'bar': {'color': "darkblue"},
-                'steps': [
-                    {'range': [-1, -0.5], 'color': 'red'},
-                    {'range': [-0.5, 0], 'color': 'lightcoral'},
-                    {'range': [0, 0.5], 'color': 'lightgreen'},
-                    {'range': [0.5, 1], 'color': 'green'}
-                ]
-            },
+            gauge={'axis': {'range': [-1, 1]},
+                   'bar': {'color': "darkblue"},
+                   'steps': [{'range': [-1, -0.5], 'color': 'red'},
+                             {'range': [-0.5, 0], 'color': 'lightcoral'},
+                             {'range': [0, 0.5], 'color': 'lightgreen'},
+                             {'range': [0.5, 1], 'color': 'green'}]},
             title={'text': "Composite Score"}))
         gauge.update_layout(height=300, template="plotly_white")
         st.plotly_chart(gauge, use_container_width=True)
         st.info(f"**Interpretasi:** {interp}\n\n**Tingkat Keyakinan:** {confidence}")
 
-        # ---------------- RINGKAS DATA HARGA/VOLUME ----------------
         st.subheader("📊 Data Harga & Volume Terkini")
         last_close = float(base['Close'].iloc[-1])
         prev_close = float(base['Close'].iloc[-2]) if len(base) > 1 else last_close
@@ -800,43 +781,34 @@ def app():
         change_pct = (change_abs / prev_close * 100) if prev_close else 0.0
         last_vol_shares = float(base['Volume'].iloc[-1])
         last_vol_lot = shares_to_lot(last_vol_shares)
-        avg_vol5_lot = shares_to_lot(base['Volume'].rolling(5).mean().iloc[-1]) if len(base) >= 5 else 0
-        transaction_value = last_close * last_vol_shares  # Rp
+        avg_vol5_lot = shares_to_lot(as_series(base['Volume']).rolling(5).mean().iloc[-1]) if len(base) >= 5 else 0
+        transaction_value = last_close * last_vol_shares
 
         cA, cB, cC, cD = st.columns(4)
         with cA:
-            st.write("**Last Close**")
-            st.write(fmt_rp(last_close))
-            arrow = "↑" if change_pct >= 0 else "↓"
-            color = "green" if change_pct >= 0 else "red"
+            st.write("**Last Close**"); st.write(fmt_rp(last_close))
+            arrow = "↑" if change_pct >= 0 else "↓"; color = "green" if change_pct >= 0 else "red"
             st.markdown(f"<span style='color:{color};'>{arrow} {change_pct:.2f}% ({change_abs:.2f})</span>", unsafe_allow_html=True)
         with cB:
-            st.write("**Volume (Lot)**")
-            st.write(fmt_int(last_vol_lot))
+            st.write("**Volume (Lot)**"); st.write(fmt_int(last_vol_lot))
         with cC:
-            st.write("**Nilai Transaksi (Rp)**")
-            st.write(fmt_rp(transaction_value))
+            st.write("**Nilai Transaksi (Rp)**"); st.write(fmt_rp(transaction_value))
         with cD:
-            st.write("**Rata-rata Volume 5H (Lot)**")
-            st.write(fmt_int(avg_vol5_lot))
+            st.write("**Rata-rata Volume 5H (Lot)**"); st.write(fmt_int(avg_vol5_lot))
 
-        # ---------------- TABEL S/R & FIB ----------------
         st.subheader("📈 Support / Resistance")
         rows = []
-        for i, lvl in enumerate(sr['Support']):
-            rows.append({"Level": f"Support {i+1}", "Harga": fmt_rp(lvl)})
-        for i, lvl in enumerate(sr['Resistance']):
-            rows.append({"Level": f"Resistance {i+1}", "Harga": fmt_rp(lvl)})
+        for i, lvl in enumerate(sr['Support']): rows.append({"Level": f"Support {i+1}", "Harga": fmt_rp(lvl)})
+        for i, lvl in enumerate(sr['Resistance']): rows.append({"Level": f"Resistance {i+1}", "Harga": fmt_rp(lvl)})
         st.table(pd.DataFrame(rows))
         st.subheader("📊 Fibonacci Levels")
         fib_df = pd.DataFrame([{"Level": k, "Harga": fmt_rp(v)} for k, v in sr['Fibonacci'].items()])
         st.table(fib_df)
 
-        # ---------------- DETAIL SKOR ----------------
         st.subheader("🔍 Detail Skor Indikator")
         ic1, ic2, ic3 = st.columns(3)
         with ic1:
-            st.metric("RSI", f"{base['RSI'].iloc[-1]:.2f}", delta=f"Skor: {scores['rsi'][0]:.2f} | Str: {scores['rsi'][1]:.2f}")
+            st.metric("RSI", f"{float(base['RSI'].iloc[-1]):.2f}", delta=f"Skor: {scores['rsi'][0]:.2f} | Str: {scores['rsi'][1]:.2f}")
             st.metric("MACD Cross", "Bullish" if scores['macd_cross'][0] > 0 else "Bearish", delta=f"Skor: {scores['macd_cross'][0]:.2f}")
         with ic2:
             st.metric("MACD Hist", "Bullish" if scores['macd_hist'][0] > 0 else "Bearish" if scores['macd_hist'][0] < 0 else "Netral",
@@ -849,7 +821,6 @@ def app():
             st.metric("OBV/ADX", f"{'Bullish' if scores['obv'][0] + scores['adx'][0] > 0 else 'Bearish' if scores['obv'][0] + scores['adx'][0] < 0 else 'Netral'}",
                       delta=f"OBV: {scores['obv'][0]:.2f}/{scores['obv'][1]:.2f} | ADX: {scores['adx'][0]:.2f}/{scores['adx'][1]:.2f}")
 
-        # ---------------- BANDARMOLOGY RINGKAS ----------------
         st.subheader("🕵️ Bandarmology (Ringkas)")
         b1, b2, b3 = st.columns(3)
         with b1:
@@ -862,14 +833,13 @@ def app():
             st.write(f"MFI (last): **{bdm['mfi_last']}**")
             st.write(f"Value Area: **{fmt_rp(bdm['va_low'])} – {fmt_rp(bdm['va_high'])}**")
 
-        if base['Close'].iloc[-1] > bdm['va_high']:
+        if float(base['Close'].iloc[-1]) > bdm['va_high']:
             st.info("🚀 Harga **di atas** Value Area → bias bullish lanjutan.")
-        elif base['Close'].iloc[-1] < bdm['va_low']:
+        elif float(base['Close'].iloc[-1]) < bdm['va_low']:
             st.warning("🔻 Harga **di bawah** Value Area → bias bearish lanjutan.")
         else:
             st.write("↔️ Harga **dalam** Value Area → konsolidasi.")
 
-        # ---------------- DIVERGENCE (BARU) ----------------
         st.subheader("🧭 Divergence Detector (RSI & MACD)")
         div_rsi = detect_divergence(base['Close'], base['RSI'], lookback=120)
         div_macd = detect_divergence(base['Close'], base['MACD'], lookback=120)
@@ -877,17 +847,14 @@ def app():
         def _desc_div(div):
             items = []
             if div["bearish"]:
-                a, b = div["bearish"]["price_points"]
-                items.append(f"**Bearish** (puncak {a.date()} → {b.date()})")
+                a, b = div["bearish"]["price_points"]; items.append(f"**Bearish** (puncak {a.date()} → {b.date()})")
             if div["bullish"]:
-                a, b = div["bullish"]["price_points"]
-                items.append(f"**Bullish** (lembah {a.date()} → {b.date()})")
+                a, b = div["bullish"]["price_points"]; items.append(f"**Bullish** (lembah {a.date()} → {b.date()})")
             return " | ".join(items) if items else "Tidak terdeteksi"
 
         st.write(f"**RSI**: {_desc_div(div_rsi)}")
         st.write(f"**MACD**: {_desc_div(div_macd)}")
 
-        # ---------------- REKOM / RENCANA TRADING ----------------
         st.subheader("🎯 Rekomendasi Trading")
         plan = None
         if res_ok and vol_ok:
@@ -907,22 +874,20 @@ def app():
                 st.metric("Target 2", fmt_rp(plan['target_2']))
                 st.metric("Risk/Reward", f"{plan['risk_reward']}:1")
             st.metric("Ukuran Posisi", f"{fmt_int(plan['position_size'])} saham ({fmt_int(plan['position_size']/100)} lot)")
-            st.info(f"- Ukuran posisi mengikuti risiko **{int(risk_percent*100)}%** dari modal {fmt_rp(account_size)} "
-                    f"\n- Harga sudah dibulatkan ke **tick size IDX**"
-                    f"\n- Status Retest: **{retest_status}**"
-                    f"\n- Pertimbangkan ambil sebagian di Target 1 dan **trail stop** untuk sisa")
+            st.info(f"- Risiko **{int(risk_percent*100)}%** dari modal {fmt_rp(account_size)}"
+                    f"\n- Dibulatkan ke **tick size IDX**"
+                    f"\n- **Retest:** {retest_status}"
+                    f"\n- Ambil sebagian di Target 1, sisanya **trail stop**")
         else:
             st.warning("Belum ada breakout kuat dengan konfirmasi volume.")
             st.write(f"**Resistance utama**: {fmt_rp(res_lvl)} → butuh close > {fmt_rp(res_lvl * (1 + buffer))} + volume > 1.5×MA20")
             st.write(f"**Support utama**: {fmt_rp(sup_lvl)} → butuh close < {fmt_rp(sup_lvl * (1 - buffer))} + volume > 1.5×MA20")
-            st.write(f"**Status Retest:** {retest_status}")
+            st.write(f"**Retest:** {retest_status}")
 
-        # ---------------- CHART ----------------
         st.subheader("📈 Chart Teknikal")
         fig = make_main_chart(base, sr, is_squeeze)
         st.plotly_chart(fig, use_container_width=True)
 
-        # ---------------- BACKTEST RINGKAS (BARU) ----------------
         st.subheader("🧪 Backtest Ringkas (Composite Threshold)")
         bt_summary, comp_series = backtest_composite(base, threshold_long=0.4, threshold_short=-0.4, max_hold=20)
         if bt_summary["num_trades"] == 0:
@@ -935,7 +900,6 @@ def app():
             with c4: st.metric("Median R", f"{bt_summary['median_R']:.2f}")
             with c5: st.metric("Rata-rata Lama (bar)", f"{bt_summary['avg_hold']:.1f}")
 
-            # Plot composite historis
             comp_fig = go.Figure()
             comp_fig.add_trace(go.Scatter(x=comp_series.index, y=comp_series.values, mode='lines', name='Composite'))
             comp_fig.add_hline(y=0.4, line_dash="dash", line_color="green", annotation_text="Long Thresh 0.4")
@@ -943,30 +907,24 @@ def app():
             comp_fig.update_layout(height=260, template="plotly_white", title="Composite Score (Historis)")
             st.plotly_chart(comp_fig, use_container_width=True)
 
-        # ---------------- KESIMPULAN TAMBAHAN ----------------
         st.subheader("🧾 Kesimpulan Tambahan")
         bullets = []
-        # Divergence
         if div_rsi["bearish"] or div_macd["bearish"]:
-            bullets.append("⚠️ Terindikasi **bearish divergence** (RSI/MACD vs harga) → waspada potensi koreksi/kelemahan momentum.")
+            bullets.append("⚠️ Ada **bearish divergence** (RSI/MACD vs harga) → waspada potensi koreksi.")
         if div_rsi["bullish"] or div_macd["bullish"]:
-            bullets.append("✅ Terindikasi **bullish divergence** (RSI/MACD vs harga) → peluang rebound/awal pembalikan.")
+            bullets.append("✅ Ada **bullish divergence** (RSI/MACD vs harga) → peluang rebound/pembalikan.")
         if not bullets:
-            bullets.append("ℹ️ Tidak ada divergence signifikan yang terdeteksi pada 120 bar terakhir.")
-        # Retest
-        bullets.append(f"🔁 **Retest** terhadap level kunci: **{retest_status}**.")
-        # Backtest
+            bullets.append("ℹ️ Tidak ada divergence signifikan 120 bar terakhir.")
+        bullets.append(f"🔁 **Retest** level kunci: **{retest_status}**.")
         if bt_summary["num_trades"] > 0:
             verdict = "positif" if bt_summary["avg_R"] > 0 else "negatif"
-            bullets.append(f"📈 Backtest composite (±1 tahun): **{bt_summary['num_trades']} trade**, win rate **{bt_summary['win_rate']:.1f}%**, "
+            bullets.append(f"📈 Backtest ±1 tahun: **{bt_summary['num_trades']} trade**, win rate **{bt_summary['win_rate']:.1f}%**, "
                            f"avg R **{bt_summary['avg_R']:.2f}** → expectancy historis **{verdict}**.")
         else:
-            bullets.append("📉 Backtest tidak menemukan trade memenuhi kriteria—pertimbangkan periode data lebih panjang atau ubah threshold.")
+            bullets.append("📉 Backtest belum menemukan trade. Coba periode lebih panjang atau threshold lain.")
         st.write("\n".join([f"- {b}" for b in bullets]))
 
-        # ---------------- DISCLAIMER ----------------
-        st.info("**Disclaimer**: Ini materi edukasi, bukan rekomendasi beli/jual. "
-                "Selalu lakukan riset mandiri dan sesuaikan dengan profil risiko.")
+        st.info("**Disclaimer**: Edukasi, bukan rekomendasi. Selalu sesuaikan dengan profil risiko.")
 
 if __name__ == "__main__":
     app()
