@@ -47,18 +47,13 @@ def round_to_tick(price: float) -> float:
     return round(price / tick) * tick
 
 def as_series(obj: pd.Series | pd.DataFrame) -> pd.Series:
-    """
-    Paksa 1D Series.
-    - DataFrame 1 kolom -> squeeze jadi Series.
-    - Coerce ke float bila memungkinkan.
-    """
+    """Paksa 1D Series (menghindari shape (n,1))."""
     if isinstance(obj, pd.DataFrame):
         s = obj.squeeze("columns")
     else:
         s = obj
     if not isinstance(s, pd.Series):
         s = pd.Series(s)
-    # pastikan numeric bila memungkinkan
     try:
         s = pd.to_numeric(s, errors="ignore")
     except Exception:
@@ -66,18 +61,82 @@ def as_series(obj: pd.Series | pd.DataFrame) -> pd.Series:
     return s
 
 # =========================
-# DATA FETCH (dengan cache)
+# NORMALISASI DATA YFINANCE
+# =========================
+def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Samakan output yfinance agar selalu punya kolom:
+    ['Open','High','Low','Close','Volume'] (case-insensitive).
+    - Flatten MultiIndex columns bila ada.
+    - Jika 'Close' tidak ada tapi 'Adj Close' ada, pakai itu.
+    """
+    if df is None or len(df) == 0:
+        return df
+
+    # Flatten MultiIndex (kasus yfinance group_by='ticker')
+    if isinstance(df.columns, pd.MultiIndex):
+        # Ambil level kolom yang berisi field OHLCV
+        if df.columns.nlevels == 2:
+            # Jika formatnya ('Open','BBCA.JK') → swap, xs ticker
+            # Cari level yang mengandung field OHLCV
+            l0 = set([str(x).lower() for x in df.columns.get_level_values(0)])
+            if {'open','high','low','close','adj close','volume'} & l0:
+                df = df.droplevel(1, axis=1)
+            else:
+                df = df.droplevel(0, axis=1)
+        else:
+            # fallback: ambil level terakhir
+            df = df.droplevel(list(range(df.columns.nlevels-1)), axis=1)
+
+    # Normalisasi kapitalisasi kolom (case-insensitive)
+    lower_map = {c.lower(): c for c in df.columns}
+    def get_col(name):
+        return lower_map.get(name.lower(), None)
+
+    rename_map = {}
+    for target in ['Open','High','Low','Close','Adj Close','Volume']:
+        src = get_col(target)
+        if src:
+            rename_map[src] = target
+    df = df.rename(columns=rename_map)
+
+    # Jika Close belum ada tapi Adj Close tersedia → pakai Adj Close
+    if 'Close' not in df.columns and 'Adj Close' in df.columns:
+        df['Close'] = df['Adj Close']
+
+    # Pastikan semua kolom wajib ada
+    required = ['Open','High','Low','Close','Volume']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing OHLCV columns after normalization: {missing}")
+
+    # Pastikan tipe numeric
+    for c in required + (['Adj Close'] if 'Adj Close' in df.columns else []):
+        df[c] = pd.to_numeric(df[c], errors='coerce')
+
+    return df[required + (['Adj Close'] if 'Adj Close' in df.columns else [])].dropna(how='all')
+
+# =========================
+# DATA FETCH (cache)
 # =========================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_history_yf(ticker_jk: str, start: datetime, end: datetime) -> pd.DataFrame:
-    df = yf.download(
+    raw = yf.download(
         ticker_jk,
         start=start.strftime("%Y-%m-%d"),
         end=end.strftime("%Y-%m-%d"),
         auto_adjust=False,
         progress=False,
+        group_by="column",  # paksa kolom datar
     )
-    return df
+    if raw is None or raw.empty:
+        return raw
+    try:
+        norm = normalize_ohlcv(raw)
+    except Exception as e:
+        st.error(f"Normalisasi data gagal: {e}")
+        return pd.DataFrame()
+    return norm
 
 def resolve_ticker(user_input: str) -> str:
     t = user_input.strip().upper()
@@ -258,7 +317,7 @@ class IndicatorScoringSystem:
     def _trend(values: pd.Series, period: int) -> float:
         s = as_series(values).dropna()
         if len(s) < max(3, period): return 0.0
-        y = s.iloc[-period:].to_numpy(dtype=float).ravel()  # <-- pastikan 1D
+        y = s.iloc[-period:].to_numpy(dtype=float).ravel()
         if y.size < 2: return 0.0
         x = np.arange(y.size, dtype=float)
         slope, _, _, _, _ = stats.linregress(x, y)
@@ -487,7 +546,7 @@ def bandarmology_brief(df: pd.DataFrame, period: int = 30) -> dict:
     return out
 
 # =========================
-# DIVERGENCE DETECTOR
+# DIVERGENCE
 # =========================
 def _local_peaks_troughs(series: pd.Series):
     s = as_series(series)
@@ -706,7 +765,7 @@ def app():
         df = fetch_history_yf(ticker, start, end)
 
         if df is None or df.empty:
-            st.warning("Data tidak tersedia. Coba tanggal lain atau kode lain."); return
+            st.warning("Data tidak tersedia atau gagal dinormalisasi. Coba tanggal/kode lain."); return
 
         last_dt = df.index[-1]
         st.caption(f"Data terakhir per: **{last_dt.date()}**")
@@ -715,13 +774,17 @@ def app():
 
         weekly_bias = 0
         if use_mtf:
-            start_w = start - timedelta(days=100)
-            dfw = fetch_history_yf(ticker, start_w, end)
-            if not dfw.empty:
-                w = dfw.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
-                if len(w) >= 30:
-                    macd_w, sig_w, _ = compute_macd(w['Close'])
-                    weekly_bias = 1 if float(macd_w.iloc[-1]) > float(sig_w.iloc[-1]) else -1
+            try:
+                start_w = start - timedelta(days=100)
+                dfw_raw = fetch_history_yf(ticker, start_w, end)
+                if dfw_raw is not None and not dfw_raw.empty:
+                    w = dfw_raw.resample('W-FRI').agg({'Open':'first','High':'max','Low':'min','Close':'last','Volume':'sum'}).dropna()
+                    if len(w) >= 30:
+                        macd_w, sig_w, _ = compute_macd(w['Close'])
+                        weekly_bias = 1 if float(macd_w.iloc[-1]) > float(sig_w.iloc[-1]) else -1
+            except Exception as e:
+                st.warning(f"MTF weekly dimatikan (resample gagal): {e}")
+                weekly_bias = 0
 
         sr = compute_support_resistance(base)
 
@@ -789,12 +852,9 @@ def app():
             st.write("**Last Close**"); st.write(fmt_rp(last_close))
             arrow = "↑" if change_pct >= 0 else "↓"; color = "green" if change_pct >= 0 else "red"
             st.markdown(f"<span style='color:{color};'>{arrow} {change_pct:.2f}% ({change_abs:.2f})</span>", unsafe_allow_html=True)
-        with cB:
-            st.write("**Volume (Lot)**"); st.write(fmt_int(last_vol_lot))
-        with cC:
-            st.write("**Nilai Transaksi (Rp)**"); st.write(fmt_rp(transaction_value))
-        with cD:
-            st.write("**Rata-rata Volume 5H (Lot)**"); st.write(fmt_int(avg_vol5_lot))
+        with cB: st.write("**Volume (Lot)**"); st.write(fmt_int(last_vol_lot))
+        with cC: st.write("**Nilai Transaksi (Rp)**"); st.write(fmt_rp(transaction_value))
+        with cD: st.write("**Rata-rata Volume 5H (Lot)**"); st.write(fmt_int(avg_vol5_lot))
 
         st.subheader("📈 Support / Resistance")
         rows = []
@@ -802,8 +862,7 @@ def app():
         for i, lvl in enumerate(sr['Resistance']): rows.append({"Level": f"Resistance {i+1}", "Harga": fmt_rp(lvl)})
         st.table(pd.DataFrame(rows))
         st.subheader("📊 Fibonacci Levels")
-        fib_df = pd.DataFrame([{"Level": k, "Harga": fmt_rp(v)} for k, v in sr['Fibonacci'].items()])
-        st.table(fib_df)
+        st.table(pd.DataFrame([{"Level": k, "Harga": fmt_rp(v)} for k, v in sr['Fibonacci'].items()]))
 
         st.subheader("🔍 Detail Skor Indikator")
         ic1, ic2, ic3 = st.columns(3)
@@ -822,6 +881,7 @@ def app():
                       delta=f"OBV: {scores['obv'][0]:.2f}/{scores['obv'][1]:.2f} | ADX: {scores['adx'][0]:.2f}/{scores['adx'][1]:.2f}")
 
         st.subheader("🕵️ Bandarmology (Ringkas)")
+        bdm = bandarmology_brief(base, period=30)
         b1, b2, b3 = st.columns(3)
         with b1:
             st.write(f"Volume Spikes (5H): **{bdm['volume_spikes_5d']}**")
@@ -924,7 +984,7 @@ def app():
             bullets.append("📉 Backtest belum menemukan trade. Coba periode lebih panjang atau threshold lain.")
         st.write("\n".join([f"- {b}" for b in bullets]))
 
-        st.info("**Disclaimer**: Edukasi, bukan rekomendasi. Selalu sesuaikan dengan profil risiko.")
+        st.info("**Disclaimer**: Edukasi, bukan rekomendasi. Sesuaikan keputusan dengan profil risiko.")
 
 if __name__ == "__main__":
     app()
