@@ -328,7 +328,7 @@ def app():
                 display_cols = [
                     "Ticker",
                     "Tgl Konfirmasi (Hari ke-5)",
-                    "Harga Candle ke-4",   # ini = harga C4
+                    "Harga Konfirmasi (Close)",   # ini = harga C4
                     "Harga Today (Last Close)",
                     "Perubahan (Rp)",
                     "Perubahan (%)",
