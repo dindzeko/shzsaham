@@ -71,13 +71,11 @@ def normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty: return df
 
     if isinstance(df.columns, pd.MultiIndex):
-        # Umumnya level 0 = field (Open/High/...) → pakai droplevel(1)
         try:
             df = df.droplevel(1, axis=1)
         except Exception:
             df = df.droplevel(0, axis=1)
 
-    # rename case-insensitive
     cols_lower = {c.lower(): c for c in df.columns}
     def pick(name):
         return cols_lower.get(name.lower())
@@ -639,11 +637,12 @@ def backtest_composite(df: pd.DataFrame, threshold_long=0.4, threshold_short=-0.
 def garch_forecast_paths(adj_close: pd.Series, sims=10000, horizon=5, seed=42):
     """
     Mengembalikan:
-      - dict summary (per day quantiles harga & return + agregat 5H VaR/CVaR)
-      - dict fan (matrix kuantil harian → harga)
-      - array cumulative return 5H (untuk Prob target agregat)
-      - matrix prices shape (sims, horizon) untuk per-hari Prob level
-    Semua dihitung dari histori s.d. titik terakhir series (anggap = as_of).
+      - dict summary (agregat 5H)
+      - dict fan_prices (harga kuantil per hari untuk fan chart)
+      - r5 (return kumulatif 5H, proporsi)
+      - paths_p (matrix harga simulasi, shape [sims, horizon])
+      - paths_r (matrix return harian simulasi, proporsi, shape [sims, horizon])  <-- BARU
+      - return_quantiles (dict {5,25,50,75,95} -> array kuantil return harian [horizon])  <-- BARU
     """
     if not ARCH_AVAILABLE:
         raise RuntimeError("Paket 'arch' tidak tersedia. Jalankan: pip install arch")
@@ -652,53 +651,47 @@ def garch_forecast_paths(adj_close: pd.Series, sims=10000, horizon=5, seed=42):
     if len(px) < 250:
         raise RuntimeError("Data terlalu pendek (< 250 bar) untuk GARCH yang stabil.")
 
-    # log-return
     r = np.log(px/px.shift(1)).dropna()
-    # fit di % agar stabil secara numerik
     am = arch_model(r*100, vol="GARCH", p=1, q=1, dist="t", mean="Zero")
     res = am.fit(disp="off")
 
-    # Simulasi jalur (daily) dengan parameter terestimasi
-    # Kita gunakan simulasi shock Student-t yang diskalakan supaya var=1
     np.random.seed(seed)
     nu = float(res.params['nu'])
     omega = float(res.params['omega'])
     alpha = float(res.params['alpha[1]'])
     beta  = float(res.params['beta[1]'])
 
-    # starting variance = var cond. terakhir (dalam %^2)
     h_last = float(res.conditional_volatility.iloc[-1]**2)  # %^2
 
     sims = int(sims)
     horizon = int(horizon)
-    paths_r = np.zeros((sims, horizon))  # dalam %
-    paths_p = np.zeros((sims, horizon))  # harga
+    paths_r_pct = np.zeros((sims, horizon))   # dalam %
+    paths_p = np.zeros((sims, horizon))       # harga
 
     p0 = float(px.iloc[-1])
-    # Simulasi
-    var = np.full(sims, h_last)  # %^2
+    var = np.full(sims, h_last)               # %^2
     price = np.full(sims, p0)
     for t in range(horizon):
-        # sample z ~ t_nu, dist dengan var=1 → scale factor sqrt((nu-2)/nu)
         z = np.random.standard_t(nu, size=sims) * np.sqrt((nu-2)/nu)
-        sigma = np.sqrt(var)  # %
-        eps = sigma * z       # shock dalam %
-        paths_r[:, t] = eps   # return (mean zero) dalam %
-        # update harga (ubah % ke proporsi)
+        sigma = np.sqrt(var)                  # %
+        eps = sigma * z                       # shock %
+        paths_r_pct[:, t] = eps
         price = price * np.exp(eps/100.0)
         paths_p[:, t] = price
-        # update variance GARCH: h_{t+1} = omega + alpha*eps_t^2 + beta*h_t
         var = omega + alpha*(eps**2) + beta*var
 
     # Kuantil harian (return & harga)
     qs = [5, 25, 50, 75, 95]
-    quant_r = {q: np.percentile(paths_r, q, axis=0)/100.0 for q in qs}   # proporsi
-    # kumulatif return untuk fan chart harga
-    cum_q = {q: np.cumsum(quant_r[q], axis=0) for q in qs}
+    # Return harian dalam proporsi
+    paths_r = paths_r_pct / 100.0
+    return_quantiles = {q: np.percentile(paths_r, q, axis=0) for q in qs}
+    # Kumulatif return utk fan chart harga (pakai quantile-of-sum approx by cum of daily quantiles)
+    quant_r_for_fan = {q: np.percentile(paths_r, q, axis=0) for q in qs}
+    cum_q = {q: np.cumsum(quant_r_for_fan[q], axis=0) for q in qs}
     fan_prices = {q: p0 * np.exp(cum_q[q]) for q in qs}
 
     # Agregat 5H
-    r5 = paths_r.sum(axis=1)/100.0
+    r5 = paths_r.sum(axis=1)
     p5 = p0 * np.exp(r5)
     summary = {
         "P5_return": float(np.percentile(r5, 5)),
@@ -711,14 +704,9 @@ def garch_forecast_paths(adj_close: pd.Series, sims=10000, horizon=5, seed=42):
         "CVaR95_return": float(r5[r5 <= np.percentile(r5,5)].mean()),
         "p0": p0
     }
-    return summary, fan_prices, r5, paths_p
+    return summary, fan_prices, r5, paths_p, paths_r, return_quantiles
 
 def garch_prob_level(paths_prices: np.ndarray, levels: dict) -> dict:
-    """
-    Hitung probabilitas per-hari menembus level (target atau stop).
-    paths_prices: shape (sims, horizon)
-    levels: {"target": float|None, "stop": float|None}
-    """
     sims, horizon = paths_prices.shape
     out = {}
     if levels.get("target"):
@@ -764,12 +752,9 @@ def make_fan_chart(fan_prices: dict) -> go.Figure:
     fig = go.Figure()
     h = len(fan_prices[50])
     x = list(range(1, h+1))
-    # 50
     fig.add_trace(go.Scatter(x=x, y=fan_prices[50], mode="lines", name="Median"))
-    # 95 band
     fig.add_trace(go.Scatter(x=x, y=fan_prices[95], mode="lines", name="P95", line=dict(width=0)))
     fig.add_trace(go.Scatter(x=x, y=fan_prices[5], mode="lines", name="P5", fill="tonexty", line=dict(width=0)))
-    # 75-25 band
     fig.add_trace(go.Scatter(x=x, y=fan_prices[75], mode="lines", name="P75", line=dict(width=0)))
     fig.add_trace(go.Scatter(x=x, y=fan_prices[25], mode="lines", name="P25", fill="tonexty", line=dict(width=0)))
     fig.update_layout(title="Forecast Probabilistik Harga 1–5 Hari (GARCH(1,1)-t)",
@@ -811,12 +796,10 @@ def app():
         if data_all is None or data_all.empty:
             st.warning("Data tidak tersedia. Coba kode atau tanggal lain."); return
 
-        # Potong data s.d as_of (inclusive)
         df_hist = data_all[data_all.index <= pd.Timestamp(as_of) + pd.Timedelta(days=1)]
         if len(df_hist) < 120:
             st.warning("Data historis terlalu pendek (<120 bar). Tambah rentang tanggal."); return
 
-        # Simpan agar bisa dipakai evaluasi
         st.caption(f"Data terakhir sampai as-of: **{df_hist.index[-1].date()}** (n={len(df_hist)})")
 
         # ======== INDICATOR PACK =========
@@ -865,10 +848,8 @@ def app():
         res_lvl = sr['Resistance'][0] if sr['Resistance'] else float(base['Close'].iloc[-1]) * 1.05
         sup_lvl = sr['Support'][0] if sr['Support'] else float(base['Close'].iloc[-1]) * 0.95
         res_ok, sup_ok, vol_ok, buffer = detector.detect(base, res_lvl, sup_lvl, bars_confirm=1)
-        retest_status = "N/A"  # pada as-of, retest ke depan belum diketahui
-        # Bandarmology ringkas
+        # Bandarmology & Divergence
         bdm = bandarmology_brief(base, period=30)
-        # Divergence
         div_rsi = detect_divergence(base['Close'], base['RSI'], lookback=120)
         div_macd = detect_divergence(base['Close'], base['MACD'], lookback=120)
 
@@ -994,41 +975,65 @@ def app():
 
         # ======== PROYEKSI PROBABILISTIK 1..5 HARI (as-of) ========
         st.subheader("🔮 Proyeksi Probabilistik 1–5 Hari (GARCH) – as-of")
+        st.caption("Fan chart: **garis tengah = median (P50)**, **area abu-abu = band P5–P95**. Ini *bukan jalur harga pasti*, melainkan **rentang kemungkinan**; biasanya median ≈ datar seperti random walk, sementara pita melebar seiring h bertambah (volatilitas terakumulasi).")
+
         if not ARCH_AVAILABLE:
             st.error("Paket 'arch' belum terpasang. Jalankan: pip install arch")
         else:
-            # pilih Adjusted Close bila ada, agar robust terhadap dividen/split
-            if 'Adj Close' in df_hist.columns:
-                px_series = df_hist['Adj Close']
-            else:
-                px_series = df_hist['Close']
+            px_series = df_hist['Adj Close'] if 'Adj Close' in df_hist.columns else df_hist['Close']
 
             try:
-                summary, fan_prices, r5, paths_p = garch_forecast_paths(px_series, sims=sims, horizon=horizon, seed=42)
+                summary, fan_prices, r5, paths_p, paths_r, return_quantiles = garch_forecast_paths(px_series, sims=sims, horizon=horizon, seed=42)
             except Exception as e:
                 st.error(f"Gagal menghitung GARCH: {e}")
-                paths_p = None; fan_prices = None; summary = None
+                paths_p = None; fan_prices = None; summary = None; paths_r = None; return_quantiles = None
 
             if summary and fan_prices is not None:
-                # Tabel kuantil harian (harga & return)
-                # Siapkan per-hari kuantil dari fan_prices
-                rows = []
+                # Tabel kuantil HARGA per hari
+                rows_price = []
                 for d in range(horizon):
-                    rows.append({
+                    rows_price.append({
                         "Hari ke-": d+1,
                         "P5": fmt_rp(fan_prices[5][d]),
                         "P50": fmt_rp(fan_prices[50][d]),
                         "P95": fmt_rp(fan_prices[95][d]),
                     })
-                st.table(pd.DataFrame(rows))
+                st.table(pd.DataFrame(rows_price))
+
                 # Fan chart
                 fan_fig = make_fan_chart(fan_prices)
                 st.plotly_chart(fan_fig, use_container_width=True)
 
-                # Prob > target/stop (default dari SR jika user kosongkan)
+                # ======= TAMBAHAN: Probabilitas naik/turun harian & kuantil RETURN harian =======
+                if paths_r is not None and return_quantiles is not None:
+                    # Prob naik/turun per hari
+                    prob_rows = []
+                    for d in range(paths_r.shape[1]):
+                        p_up = float((paths_r[:, d] > 0).mean())
+                        p_down = 1.0 - p_up
+                        prob_rows.append({"Hari ke-": d+1,
+                                          "Pr(r>0)": f"{p_up*100:.1f}%",
+                                          "Pr(r<0)": f"{p_down*100:.1f}%"})
+                    st.write("**Probabilitas return harian** (dari simulasi):")
+                    st.table(pd.DataFrame(prob_rows))
+
+                    # Kuantil return harian (dalam %)
+                    ret_rows = []
+                    for d in range(paths_r.shape[1]):
+                        ret_rows.append({
+                            "Hari ke-": d+1,
+                            "P5": f"{return_quantiles[5][d]*100:.2f}%",
+                            "P50": f"{return_quantiles[50][d]*100:.2f}%",
+                            "P95": f"{return_quantiles[95][d]*100:.2f}%"
+                        })
+                    st.write("**Rentang return harian** (kuantil):")
+                    st.table(pd.DataFrame(ret_rows))
+
+                # Prob > target/stop (default SR1/S1 jika kosong)
                 target_level = user_target if user_target > 0 else sr['Resistance'][0]
                 stop_level = user_stop if user_stop > 0 else sr['Support'][0]
                 probs = garch_prob_level(paths_p, {"target": target_level, "stop": stop_level})
+
                 colA, colB, colC = st.columns(3)
                 with colA:
                     st.metric("Harga as-of", fmt_rp(summary["p0"]))
@@ -1049,12 +1054,10 @@ def app():
                 st.caption(f"5H VaR95: {summary['VaR95_return']*100:.2f}%,  CVaR95: {summary['CVaR95_return']*100:.2f}%")
 
                 # ======== EVALUASI (jika ada data setelah as_of) ========
-                # Ambil 5 tanggal trading setelah as_of dari data_all
                 df_future = data_all[data_all.index > df_hist.index[-1]].head(horizon)
                 if not df_future.empty:
                     st.subheader("🧪 Evaluasi Akurasi (as-of vs realisasi)")
                     realized = df_future['Adj Close'] if 'Adj Close' in df_future.columns else df_future['Close']
-                    # Perbandingkan ke band 90% (P5-P95) harian
                     cover = []
                     mae = []
                     for d in range(len(realized)):
@@ -1067,7 +1070,6 @@ def app():
                     c1, c2 = st.columns(2)
                     with c1: st.metric("Coverage band 90% (hari real tersedia)", f"{cov_rate:.1f}%")
                     with c2: st.metric("MAE vs Median", f"{mae_pct:.2f}%")
-                    # Tabel ringkas realisasi vs band
                     rows_eval = []
                     idxs = realized.index
                     for d in range(len(realized)):
