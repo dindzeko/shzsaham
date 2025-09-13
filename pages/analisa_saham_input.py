@@ -1,4 +1,4 @@
-# analisa_saham.py
+# analisa_swing_narasi.py
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -7,13 +7,6 @@ import plotly.graph_objects as go
 import yfinance as yf
 from datetime import datetime, timedelta
 from scipy import stats
-
-# ====== Opsional: Model volatilitas ======
-try:
-    from arch import arch_model
-    ARCH_AVAILABLE = True
-except Exception:
-    ARCH_AVAILABLE = False
 
 # =========================
 # KONFIGURASI & BOBOT
@@ -537,7 +530,7 @@ def detect_divergence(price: pd.Series, indicator: pd.Series, lookback: int = 12
     return out
 
 # =========================
-# BACKTEST RINGKAS (Composite)
+# PAKET INDIKATOR
 # =========================
 def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
@@ -554,170 +547,6 @@ def compute_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     d['MFI'] = compute_mfi_corrected(d, 14)
     d['Volume_MA20'] = as_series(d['Volume']).rolling(20).mean()
     return d
-
-def backtest_composite(df: pd.DataFrame, threshold_long=0.4, threshold_short=-0.4, max_hold=20):
-    scorer = IndicatorScoringSystem()
-    comp = []
-    for idx in range(len(df)):
-        if idx < 100:
-            comp.append(0.0); continue
-        window = df.iloc[:idx+1]
-        scores = {}
-        scores['rsi'] = scorer.score_rsi(window['RSI'])
-        mc, mcs, mh, mhs = scorer.score_macd(window['MACD'], window['Signal'], window['Hist'])
-        scores['macd_cross'] = (mc, mcs)
-        scores['macd_hist'] = (mh, mhs)
-        bsc, bst, _ = scorer.score_boll(window['Close'], window['BB_Upper'], window['BB_Lower'],
-                                        window['BB_%B'], window['BB_BW'])
-        scores['bollinger'] = (bsc, bst)
-        price_chg_pct = float((window['Close'].iloc[-1] - window['Close'].iloc[-2]) /
-                              max(window['Close'].iloc[-2], 1e-9) * 100)
-        vsc, vst = scorer.score_volume(window['Volume'], window['Volume_MA20'], price_chg_pct)
-        scores['volume'] = (vsc, vst)
-        os, ost = scorer.score_obv(window['OBV'])
-        scores['obv'] = (os, ost)
-        axs, axst = scorer.score_adx(window['ADX'], window['Plus_DI'], window['Minus_DI'])
-        scores['adx'] = (axs, axst)
-        comp.append(scorer.composite(scores))
-    comp = pd.Series(comp, index=df.index)
-
-    trades = []
-    i = 101
-    while i < len(df):
-        price = float(df['Close'].iloc[i])
-        atr = float(df['ATR'].iloc[i])
-        enter_long = comp.iloc[i-1] <= threshold_long and comp.iloc[i] > threshold_long
-        enter_short = comp.iloc[i-1] >= threshold_short and comp.iloc[i] < threshold_short
-        if enter_long:
-            entry = price; stop = entry - 2*atr; target = entry + 2*atr
-            stop_dist = entry - stop; j = i+1; exit_price = None; reason = None
-            while j < min(i+max_hold, len(df)):
-                high = float(df['High'].iloc[j]); low = float(df['Low'].iloc[j]); cl = float(df['Close'].iloc[j])
-                if low <= stop: exit_price, reason = stop, "Stop"; break
-                if high >= target: exit_price, reason = target, "Target"; break
-                if comp.iloc[j] <= 0: exit_price, reason = cl, "NeutralExit"; break
-                j += 1
-            if exit_price is None:
-                exit_price, reason = float(df['Close'].iloc[min(i+max_hold-1, len(df)-1)]), "Timeout"
-            R = (exit_price - entry) / max(stop_dist, 1e-9)
-            trades.append({"dir":"Long","entry_i":i,"exit_i":j,"R":R,"reason":reason})
-            i = j + 1
-        elif enter_short:
-            entry = price; stop = entry + 2*atr; target = entry - 2*atr
-            stop_dist = stop - entry; j = i+1; exit_price = None; reason = None
-            while j < min(i+max_hold, len(df)):
-                high = float(df['High'].iloc[j]); low = float(df['Low'].iloc[j]); cl = float(df['Close'].iloc[j])
-                if high >= stop: exit_price, reason = stop, "Stop"; break
-                if low <= target: exit_price, reason = target, "Target"; break
-                if comp.iloc[j] >= 0: exit_price, reason = cl, "NeutralExit"; break
-                j += 1
-            if exit_price is None:
-                exit_price, reason = float(df['Close'].iloc[min(i+max_hold-1, len(df)-1)]), "Timeout"
-            R = (entry - exit_price) / max(stop_dist, 1e-9)
-            trades.append({"dir":"Short","entry_i":i,"exit_i":j,"R":R,"reason":reason})
-            i = j + 1
-        else:
-            i += 1
-
-    if len(trades) == 0:
-        return {"num_trades":0,"win_rate":0.0,"avg_R":0.0,"median_R":0.0,"avg_hold":0.0,"detail":pd.DataFrame()}, comp
-
-    tr_df = pd.DataFrame(trades)
-    win_rate = float((tr_df['R'] > 0).mean()*100)
-    avg_R = float(tr_df['R'].mean())
-    median_R = float(tr_df['R'].median())
-    avg_hold = float((tr_df['exit_i'] - tr_df['entry_i']).mean())
-    summary = {"num_trades":int(len(trades)),"win_rate":win_rate,"avg_R":avg_R,"median_R":median_R,"avg_hold":avg_hold,"detail":tr_df}
-    return summary, comp
-
-# =========================
-# GARCH – PROYEKSI 1..5 HARI
-# =========================
-@st.cache_data(ttl=900, show_spinner=False)
-def garch_forecast_paths(adj_close: pd.Series, sims=10000, horizon=5, seed=42):
-    """
-    Mengembalikan:
-      - dict summary (agregat 5H)
-      - dict fan_prices (harga kuantil per hari untuk fan chart)
-      - r5 (return kumulatif 5H, proporsi)
-      - paths_p (matrix harga simulasi, shape [sims, horizon])
-      - paths_r (matrix return harian simulasi, proporsi, shape [sims, horizon])  <-- BARU
-      - return_quantiles (dict {5,25,50,75,95} -> array kuantil return harian [horizon])  <-- BARU
-    """
-    if not ARCH_AVAILABLE:
-        raise RuntimeError("Paket 'arch' tidak tersedia. Jalankan: pip install arch")
-
-    px = as_series(adj_close).dropna()
-    if len(px) < 250:
-        raise RuntimeError("Data terlalu pendek (< 250 bar) untuk GARCH yang stabil.")
-
-    r = np.log(px/px.shift(1)).dropna()
-    am = arch_model(r*100, vol="GARCH", p=1, q=1, dist="t", mean="Zero")
-    res = am.fit(disp="off")
-
-    np.random.seed(seed)
-    nu = float(res.params['nu'])
-    omega = float(res.params['omega'])
-    alpha = float(res.params['alpha[1]'])
-    beta  = float(res.params['beta[1]'])
-
-    h_last = float(res.conditional_volatility.iloc[-1]**2)  # %^2
-
-    sims = int(sims)
-    horizon = int(horizon)
-    paths_r_pct = np.zeros((sims, horizon))   # dalam %
-    paths_p = np.zeros((sims, horizon))       # harga
-
-    p0 = float(px.iloc[-1])
-    var = np.full(sims, h_last)               # %^2
-    price = np.full(sims, p0)
-    for t in range(horizon):
-        z = np.random.standard_t(nu, size=sims) * np.sqrt((nu-2)/nu)
-        sigma = np.sqrt(var)                  # %
-        eps = sigma * z                       # shock %
-        paths_r_pct[:, t] = eps
-        price = price * np.exp(eps/100.0)
-        paths_p[:, t] = price
-        var = omega + alpha*(eps**2) + beta*var
-
-    # Kuantil harian (return & harga)
-    qs = [5, 25, 50, 75, 95]
-    # Return harian dalam proporsi
-    paths_r = paths_r_pct / 100.0
-    return_quantiles = {q: np.percentile(paths_r, q, axis=0) for q in qs}
-    # Kumulatif return utk fan chart harga (pakai quantile-of-sum approx by cum of daily quantiles)
-    quant_r_for_fan = {q: np.percentile(paths_r, q, axis=0) for q in qs}
-    cum_q = {q: np.cumsum(quant_r_for_fan[q], axis=0) for q in qs}
-    fan_prices = {q: p0 * np.exp(cum_q[q]) for q in qs}
-
-    # Agregat 5H
-    r5 = paths_r.sum(axis=1)
-    p5 = p0 * np.exp(r5)
-    summary = {
-        "P5_return": float(np.percentile(r5, 5)),
-        "P50_return": float(np.percentile(r5, 50)),
-        "P95_return": float(np.percentile(r5, 95)),
-        "P5_price": float(np.percentile(p5, 5)),
-        "P50_price": float(np.percentile(p5, 50)),
-        "P95_price": float(np.percentile(p5, 95)),
-        "VaR95_return": float(np.percentile(r5, 5)),
-        "CVaR95_return": float(r5[r5 <= np.percentile(r5,5)].mean()),
-        "p0": p0
-    }
-    return summary, fan_prices, r5, paths_p, paths_r, return_quantiles
-
-def garch_prob_level(paths_prices: np.ndarray, levels: dict) -> dict:
-    sims, horizon = paths_prices.shape
-    out = {}
-    if levels.get("target"):
-        target = float(levels["target"])
-        out["prob_up_by_day"] = [(paths_prices[:, d] >= target).mean() for d in range(horizon)]
-        out["prob_up_5d"] = (paths_prices[:, -1] >= target).mean()
-    if levels.get("stop"):
-        stop = float(levels["stop"])
-        out["prob_down_by_day"] = [(paths_prices[:, d] <= stop).mean() for d in range(horizon)]
-        out["prob_down_5d"] = (paths_prices[:, -1] <= stop).mean()
-    return out
 
 # =========================
 # CHART
@@ -748,45 +577,107 @@ def make_main_chart(df: pd.DataFrame, sr: dict, is_squeeze: bool) -> go.Figure:
                       hovermode='x unified')
     return fig
 
-def make_fan_chart(fan_prices: dict) -> go.Figure:
-    fig = go.Figure()
-    h = len(fan_prices[50])
-    x = list(range(1, h+1))
-    fig.add_trace(go.Scatter(x=x, y=fan_prices[50], mode="lines", name="Median"))
-    fig.add_trace(go.Scatter(x=x, y=fan_prices[95], mode="lines", name="P95", line=dict(width=0)))
-    fig.add_trace(go.Scatter(x=x, y=fan_prices[5], mode="lines", name="P5", fill="tonexty", line=dict(width=0)))
-    fig.add_trace(go.Scatter(x=x, y=fan_prices[75], mode="lines", name="P75", line=dict(width=0)))
-    fig.add_trace(go.Scatter(x=x, y=fan_prices[25], mode="lines", name="P25", fill="tonexty", line=dict(width=0)))
-    fig.update_layout(title="Forecast Probabilistik Harga 1–5 Hari (GARCH(1,1)-t)",
-                      xaxis_title="Hari ke-", yaxis_title="Harga (Rp)", template="plotly_white", height=380)
-    return fig
+# =========================
+# NARRATIVE ENGINE
+# =========================
+def build_narrative(ticker: str, base: pd.DataFrame, scores: dict, composite: float,
+                    confidence: str, sr: dict, weekly_bias: int,
+                    bdm: dict, div_rsi: dict, div_macd: dict,
+                    plan: dict | None, res_ok: bool, sup_ok: bool, vol_ok: bool) -> str:
+    """Rakit narasi 5–8 kalimat, bahasa natural."""
+    last_close = float(base['Close'].iloc[-1])
+    prev_close = float(base['Close'].iloc[-2]) if len(base) > 1 else last_close
+    chg_pct = (last_close - prev_close) / prev_close * 100 if prev_close else 0.0
+
+    # Tren & konteks
+    sma200 = base['Close'].rolling(200).mean()
+    in_uptrend = (last_close > float(sma200.iloc[-1])) if not np.isnan(sma200.iloc[-1]) else False
+    adx_now = float(base['ADX'].iloc[-1])
+    rsi_now = float(base['RSI'].iloc[-1])
+    macd_cross = scores['macd_cross'][0] > 0
+    macd_near_zero = abs(float(base['MACD'].iloc[-1])) < (base['Close'].iloc[-1] * 0.0005)  # pendekatan relatif
+    bbw = float(base['BB_BW'].iloc[-1])
+    # persentil BW 6 bulan
+    bw_hist = base['BB_BW'].iloc[-126:].dropna()
+    bw_pct = stats.percentileofscore(bw_hist.to_numpy().ravel(), bbw) / 100.0 if len(bw_hist) > 10 else 0.5
+    is_squeeze = bw_pct < 0.2
+
+    head = []
+    # Headline singkat
+    if in_uptrend:
+        head.append("uptrend ringan" if adx_now < 20 else "uptrend")
+    else:
+        head.append("di bawah tren mayor" if adx_now >= 20 else "range/lemah")
+
+    # Interpretasi komposit
+    from_label = IndicatorScoringSystem.interpret(composite)
+    bias_txt = "bias mingguan mendukung" if weekly_bias > 0 else ("bias mingguan melemahkan" if weekly_bias < 0 else "tanpa bias mingguan")
+
+    # Setup deteksi
+    setup_msgs = []
+    if is_squeeze and vol_ok and res_ok:
+        setup_msgs.append("breakout dari konsolidasi (squeeze) didukung volume")
+    elif is_squeeze and not res_ok:
+        setup_msgs.append("konsolidasi menyempit; menunggu breakout valid")
+    if (rsi_now >= 40 and rsi_now <= 55) and in_uptrend and macd_cross:
+        setup_msgs.append("pullback sehat ke area MA/BB dengan momentum mulai pulih")
+    if div_rsi["bullish"] or div_macd["bullish"]:
+        setup_msgs.append("terlihat bullish divergence di area support")
+
+    # Bandarmology ringkas
+    band_msg = []
+    if bdm['adl_5d_pct'] > 0 or bdm['obv_5d_pct'] > 0:
+        band_msg.append("indikasi akumulasi ringan")
+    if bdm['volume_spikes_5d'] >= 1:
+        band_msg.append("lonjakan volume beberapa hari terakhir")
+    if bdm['in_value_area']:
+        band_msg.append("harga masih di Value Area (konsolidasi)")
+    else:
+        band_msg.append("harga di luar Value Area")
+
+    # Level penting
+    R1 = sr['Resistance'][0] if sr['Resistance'] else last_close * 1.05
+    S1 = sr['Support'][0] if sr['Support'] else last_close * 0.95
+
+    # Rangkai kalimat
+    parts = []
+    parts.append(f"**{ticker}** {head[0]}; {from_label.lower()} (keyakinan {confidence}). {bias_txt}.")
+    parts.append(f"Harga **{('naik' if chg_pct>=0 else 'turun')} {abs(chg_pct):.2f}%** pada bar terakhir; RSI **{rsi_now:.0f}**, ADX **{int(adx_now)}**, MACD {'cross up' if macd_cross else 'cross down'}{', dekat nol' if macd_near_zero else ''}.")
+    if setup_msgs:
+        parts.append("Setup: " + "; ".join(setup_msgs) + ".")
+    parts.append(f"Level kunci **R1 {fmt_rp(R1)}** dan **S1 {fmt_rp(S1)}**.")
+    parts.append("Bandarmology: " + ", ".join(band_msg) + ".")
+    if plan:
+        parts.append(f"Rencana: {plan['type']} di atas level konfirmasi, dengan RR sekitar **{plan['risk_reward']}:1**; detail di kotak rencana.")
+    else:
+        # arahan kapan valid
+        parts.append("Belum ada trigger kuat; validasi butuh **close** menembus level kunci dengan **volume > 1.5× MA20**.")
+    parts.append("Catatan: disiplin **stop-loss ATR** dan perhatikan likuiditas untuk menghindari slippage.")
+    return " ".join(parts)
 
 # =========================
 # APP STREAMLIT
 # =========================
 def app():
-    st.set_page_config(page_title="Analisa Saham IDX: Teknikal + Probabilistik 5H", layout="wide")
-    st.title("📊 Analisa Saham IDX – Teknikal + Proyeksi Probabilistik 1–5 Hari")
+    st.set_page_config(page_title="Analisa Saham IDX – Narasi Swing", layout="wide")
+    st.title("📝 Analisa Saham IDX – Narasi Swing 3–5 Hari")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        ticker_in = st.text_input("Kode Saham", value="BBCA").strip().upper()
-        account_size = st.number_input("Modal (Rp)", value=100_000_000, step=10_000_000)
-        risk_percent = st.slider("Risiko per Trade (%)", 0.5, 5.0, 2.0) / 100
-    with c2:
-        as_of = st.date_input("📅 Tanggal Analisis (as-of)", value=datetime.today())
-        use_mtf = st.checkbox("Gunakan Konfirmasi Weekly", value=True)
+    with st.container():
+        c1, c2, c3 = st.columns([1.2, 1, 1])
+        with c1:
+            ticker_in = st.text_input("Kode Saham", value="BBCA").strip().upper()
+            as_of = st.date_input("📅 Tanggal Analisis (as-of)", value=datetime.today())
+        with c2:
+            account_size = st.number_input("Modal (Rp)", value=100_000_000, step=10_000_000)
+            risk_percent = st.slider("Risiko per Trade (%)", 0.5, 5.0, 2.0) / 100
+        with c3:
+            use_mtf = st.checkbox("Gunakan Konfirmasi Weekly", value=True)
+            show_details = st.checkbox("Tampilkan Detail Indikator", value=False)
 
-    adv = st.expander("Pengaturan Lanjutan (Forecast)")
-    with adv:
-        sims = st.slider("Jumlah simulasi GARCH", 2000, 20000, 10000, step=1000)
-        horizon = st.slider("Horizon hari trading", 3, 5, 5)
-        user_target = st.number_input("Target harga (opsional; default: Resistance 1)", value=0.0, step=10.0)
-        user_stop = st.number_input("Stop harga (opsional; default: Support 1)", value=0.0, step=10.0)
-
-    if st.button("🚀 Mulai Analisis"):
+    if st.button("🚀 Mulai Analisis", use_container_width=True):
         if not ticker_in:
-            st.warning("Masukkan kode saham terlebih dahulu."); return
+            st.warning("Masukkan kode saham terlebih dahulu.")
+            return
 
         ticker = resolve_ticker(ticker_in)
         end_all = datetime.combine(as_of, datetime.min.time()) + timedelta(days=1)
@@ -794,11 +685,13 @@ def app():
 
         data_all = fetch_history_yf(ticker, start_all, end_all)
         if data_all is None or data_all.empty:
-            st.warning("Data tidak tersedia. Coba kode atau tanggal lain."); return
+            st.error("Data tidak tersedia dari yfinance. Coba kode/tanggal lain.")
+            return
 
         df_hist = data_all[data_all.index <= pd.Timestamp(as_of) + pd.Timedelta(days=1)]
         if len(df_hist) < 120:
-            st.warning("Data historis terlalu pendek (<120 bar). Tambah rentang tanggal."); return
+            st.warning("Data historis terlalu pendek (<120 bar). Tambah rentang tanggal.")
+            return
 
         st.caption(f"Data terakhir sampai as-of: **{df_hist.index[-1].date()}** (n={len(df_hist)})")
 
@@ -843,247 +736,105 @@ def app():
         confidence = scorer.confidence(composite, scores)
         interp = scorer.interpret(composite)
 
-        # Breakout + Retest
+        # Breakout + Rencana
         detector = BreakoutDetector()
         res_lvl = sr['Resistance'][0] if sr['Resistance'] else float(base['Close'].iloc[-1]) * 1.05
         sup_lvl = sr['Support'][0] if sr['Support'] else float(base['Close'].iloc[-1]) * 0.95
         res_ok, sup_ok, vol_ok, buffer = detector.detect(base, res_lvl, sup_lvl, bars_confirm=1)
-        # Bandarmology & Divergence
-        bdm = bandarmology_brief(base, period=30)
-        div_rsi = detect_divergence(base['Close'], base['RSI'], lookback=120)
-        div_macd = detect_divergence(base['Close'], base['MACD'], lookback=120)
 
-        # ======== OUTPUT TEKNIKAL =========
-        st.subheader("🎯 Hasil Analisa Cross-Confirmation (as-of)")
-        gauge = go.Figure(go.Indicator(
-            mode="gauge+number+delta",
-            value=composite, delta={'reference': 0},
-            gauge={'axis': {'range': [-1, 1]},
-                   'bar': {'color': "darkblue"},
-                   'steps': [{'range': [-1, -0.5], 'color': 'red'},
-                             {'range': [-0.5, 0], 'color': 'lightcoral'},
-                             {'range': [0, 0.5], 'color': 'lightgreen'},
-                             {'range': [0.5, 1], 'color': 'green'}]},
-            title={'text': "Composite Score"}))
-        gauge.update_layout(height=300, template="plotly_white")
-        st.plotly_chart(gauge, use_container_width=True)
-        st.info(f"**Interpretasi:** {interp} • **Keyakinan:** {confidence}")
-
-        # Ringkas harga & volume
-        st.subheader("📊 Ringkas Harga & Volume (as-of)")
-        last_close = float(base['Close'].iloc[-1])
-        prev_close = float(base['Close'].iloc[-2]) if len(base) > 1 else last_close
-        change_abs = last_close - prev_close
-        change_pct = (change_abs / prev_close * 100) if prev_close else 0.0
-        last_vol_shares = float(base['Volume'].iloc[-1])
-        last_vol_lot = shares_to_lot(last_vol_shares)
-        avg_vol5_lot = shares_to_lot(as_series(base['Volume']).rolling(5).mean().iloc[-1]) if len(base) >= 5 else 0
-        transaction_value = last_close * last_vol_shares
-
-        cA, cB, cC, cD = st.columns(4)
-        with cA:
-            st.write("**Last Close**"); st.write(fmt_rp(last_close))
-            arrow = "↑" if change_pct >= 0 else "↓"; color = "green" if change_pct >= 0 else "red"
-            st.markdown(f"<span style='color:{color};'>{arrow} {change_pct:.2f}% ({change_abs:.2f})</span>", unsafe_allow_html=True)
-        with cB: st.write("**Volume (Lot)**"); st.write(fmt_int(last_vol_lot))
-        with cC: st.write("**Nilai Transaksi (Rp)**"); st.write(fmt_rp(transaction_value))
-        with cD: st.write("**Rata-rata Volume 5H (Lot)**"); st.write(fmt_int(avg_vol5_lot))
-
-        # SR & Fib
-        st.subheader("📈 Support / Resistance (as-of)")
-        rows = []
-        for i, lvl in enumerate(sr['Support']): rows.append({"Level": f"Support {i+1}", "Harga": fmt_rp(lvl)})
-        for i, lvl in enumerate(sr['Resistance']): rows.append({"Level": f"Resistance {i+1}", "Harga": fmt_rp(lvl)})
-        st.table(pd.DataFrame(rows))
-        st.subheader("📊 Fibonacci Levels")
-        st.table(pd.DataFrame([{"Level": k, "Harga": fmt_rp(v)} for k, v in sr['Fibonacci'].items()]))
-
-        # Detail skor
-        st.subheader("🔍 Detail Skor Indikator")
-        ic1, ic2, ic3 = st.columns(3)
-        with ic1:
-            st.metric("RSI", f"{float(base['RSI'].iloc[-1]):.2f}", delta=f"Skor: {scores['rsi'][0]:.2f} | Str: {scores['rsi'][1]:.2f}")
-            st.metric("MACD Cross", "Bullish" if scores['macd_cross'][0] > 0 else "Bearish", delta=f"Skor: {scores['macd_cross'][0]:.2f}")
-        with ic2:
-            st.metric("MACD Hist", "Bullish" if scores['macd_hist'][0] > 0 else "Bearish" if scores['macd_hist'][0] < 0 else "Netral",
-                      delta=f"Skor: {scores['macd_hist'][0]:.2f} | Str: {scores['macd_hist'][1]:.2f}")
-            st.metric("Bollinger", "Bullish" if scores['bollinger'][0] > 0 else "Bearish" if scores['bollinger'][0] < 0 else "Netral",
-                      delta=f"Skor: {scores['bollinger'][0]:.2f} | Str: {scores['bollinger'][1]:.2f}")
-        with ic3:
-            st.metric("Volume", "Bullish" if scores['volume'][0] > 0 else "Bearish" if scores['volume'][0] < 0 else "Netral",
-                      delta=f"Skor: {scores['volume'][0]:.2f} | Str: {scores['volume'][1]:.2f}")
-            st.metric("OBV/ADX", f"{'Bullish' if scores['obv'][0] + scores['adx'][0] > 0 else 'Bearish' if scores['obv'][0] + scores['adx'][0] < 0 else 'Netral'}",
-                      delta=f"OBV: {scores['obv'][0]:.2f}/{scores['obv'][1]:.2f} | ADX: {scores['adx'][0]:.2f}/{scores['adx'][1]:.2f}")
-
-        # Bandarmology
-        st.subheader("🕵️ Bandarmology (Ringkas)")
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            st.write(f"Volume Spikes (5H): **{bdm['volume_spikes_5d']}**")
-            st.write(f"ADL 5H Δ%: **{bdm['adl_5d_pct']}%**")
-        with b2:
-            st.write(f"Hari +Price & +Vol (30H): **{bdm['pos_volume_price_days']}**")
-            st.write(f"OBV 5H Δ%: **{bdm['obv_5d_pct']}%**")
-        with b3:
-            st.write(f"MFI (last): **{bdm['mfi_last']}**")
-            st.write(f"Value Area: **{fmt_rp(bdm['va_low'])} – {fmt_rp(bdm['va_high'])}**")
-            st.write("Status:", "📦 konsolidasi." if bdm['in_value_area'] else ("🚀 di atas VA" if last_close > bdm['va_high'] else "🔻 di bawah VA"))
-
-        # Divergence
-        st.subheader("🧭 Divergence (RSI & MACD)")
-        def _desc_div(div):
-            items = []
-            if div["bearish"]:
-                a, b = div["bearish"]["price_points"]; items.append(f"**Bearish** (puncak {a.date()} → {b.date()})")
-            if div["bullish"]:
-                a, b = div["bullish"]["price_points"]; items.append(f"**Bullish** (lembah {a.date()} → {b.date()})")
-            return " | ".join(items) if items else "Tidak terdeteksi"
-        st.write(f"**RSI**: {_desc_div(div_rsi)}")
-        st.write(f"**MACD**: {_desc_div(div_macd)}")
-
-        # Rekomendasi Trading (as-of)
-        st.subheader("🎯 Rekomendasi Trading (as-of)")
         plan = None
         if res_ok and vol_ok:
             plan = detector.plan(base, "resistance", res_lvl, buffer, account_size, risk_percent)
         elif sup_ok and vol_ok:
             plan = detector.plan(base, "support", sup_lvl, buffer, account_size, risk_percent)
+
+        # Bandarmology & Divergence
+        bdm = bandarmology_brief(base, period=30)
+        div_rsi = detect_divergence(base['Close'], base['RSI'], lookback=120)
+        div_macd = detect_divergence(base['Close'], base['MACD'], lookback=120)
+
+        # ======== NARASI =========
+        st.subheader(f"✍️ Narasi – {ticker_in.upper()} ({df_hist.index[-1].date()})")
+        narrative = build_narrative(ticker_in.upper(), base, scores, composite, confidence, sr, weekly_bias,
+                                    bdm, div_rsi, div_macd, plan, res_ok, sup_ok, vol_ok)
+        st.write(narrative)
+
+        # ======== RENCANA TRADING (bullet) ========
+        st.subheader("🎯 Rencana Trading (Ringkas)")
         if plan:
-            st.success("🚀 **Sinyal Breakout Terdeteksi (as-of)**")
-            p1, p2 = st.columns(2)
-            with p1:
+            c1, c2, c3 = st.columns(3)
+            with c1:
                 st.metric("Jenis", plan['type'])
                 st.metric("Entry", fmt_rp(plan['entry']))
-                st.metric("Stop", fmt_rp(plan['stop_loss']))
-            with p2:
+            with c2:
+                st.metric("Stop Loss", fmt_rp(plan['stop_loss']))
                 st.metric("Target 1", fmt_rp(plan['target_1']))
+            with c3:
                 st.metric("Target 2", fmt_rp(plan['target_2']))
                 st.metric("Risk/Reward", f"{plan['risk_reward']}:1")
-            st.metric("Ukuran Posisi", f"{fmt_int(plan['position_size'])} saham ({fmt_int(plan['position_size']/100)} lot)")
+            st.metric("Ukuran Posisi",
+                      f"{fmt_int(plan['position_size'])} saham ({fmt_int(plan['position_size']/100)} lot)")
             st.info(f"- Risiko **{int(risk_percent*100)}%** dari modal {fmt_rp(account_size)}"
-                    f"\n- Dibulatkan ke **tick size IDX**"
-                    f"\n- Retest: (as-of) belum dapat dinilai sesudahnya")
+                    f"\n- Dibulatkan ke **tick size IDX**\n- Amati retest & volume lanjutan")
         else:
-            st.warning("Belum ada breakout kuat (as-of).")
-            st.write(f"**Resistance utama**: {fmt_rp(res_lvl)} → butuh close > {fmt_rp(res_lvl * (1 + buffer))} + volume > 1.5×MA20")
-            st.write(f"**Support utama**: {fmt_rp(sup_lvl)} → butuh close < {fmt_rp(sup_lvl * (1 - buffer))} + volume > 1.5×MA20")
+            st.warning("Belum ada rencana eksekusi karena trigger belum valid.\n"
+                       f"- Untuk **long**: butuh close > {fmt_rp(res_lvl * (1 + buffer))} + volume > 1.5×MA20\n"
+                       f"- Untuk **short**: butuh close < {fmt_rp(sup_lvl * (1 - buffer))} + volume > 1.5×MA20")
 
-        # Chart teknikal
+        # ======== CHART ========
         st.subheader("📈 Chart Teknikal (as-of)")
-        fig_main = make_main_chart(base, sr, is_squeeze)
+        fig_main = make_main_chart(base, sr, is_squeeze=(stats.percentileofscore(base['BB_BW'].iloc[-126:].dropna(), float(base['BB_BW'].iloc[-1]))/100.0 < 0.2 if len(base) >= 126 else False))
         st.plotly_chart(fig_main, use_container_width=True)
 
-        # ======== PROYEKSI PROBABILISTIK 1..5 HARI (as-of) ========
-        st.subheader("🔮 Proyeksi Probabilistik 1–5 Hari (GARCH) – as-of")
-        st.caption("Fan chart: **garis tengah = median (P50)**, **area abu-abu = band P5–P95**. Ini *bukan jalur harga pasti*, melainkan **rentang kemungkinan**; biasanya median ≈ datar seperti random walk, sementara pita melebar seiring h bertambah (volatilitas terakumulasi).")
+        # ======== DETAIL (opsional) ========
+        if show_details:
+            st.subheader("🔍 Detail Indikator & Skor")
+            ic1, ic2, ic3 = st.columns(3)
+            with ic1:
+                st.metric("Composite", f"{composite:.2f}")
+                st.metric("Interpretasi", interp)
+                st.metric("Confidence", confidence)
+            with ic2:
+                st.metric("RSI", f"{float(base['RSI'].iloc[-1]):.2f}",
+                          delta=f"Skor: {scores['rsi'][0]:.2f} | Str: {scores['rsi'][1]:.2f}")
+                st.metric("MACD Cross", "Bullish" if scores['macd_cross'][0] > 0 else "Bearish",
+                          delta=f"Skor: {scores['macd_cross'][0]:.2f}")
+            with ic3:
+                st.metric("Bollinger", "Bullish" if scores['bollinger'][0] > 0 else "Bearish" if scores['bollinger'][0] < 0 else "Netral",
+                          delta=f"Skor: {scores['bollinger'][0]:.2f} | Str: {scores['bollinger'][1]:.2f}")
+                st.metric("Volume", "Bullish" if scores['volume'][0] > 0 else "Bearish" if scores['volume'][0] < 0 else "Netral",
+                          delta=f"Skor: {scores['volume'][0]:.2f} | Str: {scores['volume'][1]:.2f}")
 
-        if not ARCH_AVAILABLE:
-            st.error("Paket 'arch' belum terpasang. Jalankan: pip install arch")
-        else:
-            px_series = df_hist['Adj Close'] if 'Adj Close' in df_hist.columns else df_hist['Close']
+            st.write("**Support / Resistance / Fibonacci**")
+            rows = []
+            for i, lvl in enumerate(sr['Support']): rows.append({"Level": f"Support {i+1}", "Harga": fmt_rp(lvl)})
+            for i, lvl in enumerate(sr['Resistance']): rows.append({"Level": f"Resistance {i+1}", "Harga": fmt_rp(lvl)})
+            st.table(pd.DataFrame(rows))
+            st.table(pd.DataFrame([{"Level": k, "Harga": fmt_rp(v)} for k, v in sr['Fibonacci'].items()]))
 
-            try:
-                summary, fan_prices, r5, paths_p, paths_r, return_quantiles = garch_forecast_paths(px_series, sims=sims, horizon=horizon, seed=42)
-            except Exception as e:
-                st.error(f"Gagal menghitung GARCH: {e}")
-                paths_p = None; fan_prices = None; summary = None; paths_r = None; return_quantiles = None
+            st.write("**Bandarmology Ringkas**")
+            st.json({
+                "volume_spikes_5d": bdm["volume_spikes_5d"],
+                "adl_5d_pct": bdm["adl_5d_pct"],
+                "obv_5d_pct": bdm["obv_5d_pct"],
+                "mfi_last": bdm["mfi_last"],
+                "value_area": [bdm["va_low"], bdm["va_high"]],
+                "in_value_area": bdm["in_value_area"]
+            })
 
-            if summary and fan_prices is not None:
-                # Tabel kuantil HARGA per hari
-                rows_price = []
-                for d in range(horizon):
-                    rows_price.append({
-                        "Hari ke-": d+1,
-                        "P5": fmt_rp(fan_prices[5][d]),
-                        "P50": fmt_rp(fan_prices[50][d]),
-                        "P95": fmt_rp(fan_prices[95][d]),
-                    })
-                st.table(pd.DataFrame(rows_price))
-
-                # Fan chart
-                fan_fig = make_fan_chart(fan_prices)
-                st.plotly_chart(fan_fig, use_container_width=True)
-
-                # ======= TAMBAHAN: Probabilitas naik/turun harian & kuantil RETURN harian =======
-                if paths_r is not None and return_quantiles is not None:
-                    # Prob naik/turun per hari
-                    prob_rows = []
-                    for d in range(paths_r.shape[1]):
-                        p_up = float((paths_r[:, d] > 0).mean())
-                        p_down = 1.0 - p_up
-                        prob_rows.append({"Hari ke-": d+1,
-                                          "Pr(r>0)": f"{p_up*100:.1f}%",
-                                          "Pr(r<0)": f"{p_down*100:.1f}%"})
-                    st.write("**Probabilitas return harian** (dari simulasi):")
-                    st.table(pd.DataFrame(prob_rows))
-
-                    # Kuantil return harian (dalam %)
-                    ret_rows = []
-                    for d in range(paths_r.shape[1]):
-                        ret_rows.append({
-                            "Hari ke-": d+1,
-                            "P5": f"{return_quantiles[5][d]*100:.2f}%",
-                            "P50": f"{return_quantiles[50][d]*100:.2f}%",
-                            "P95": f"{return_quantiles[95][d]*100:.2f}%"
-                        })
-                    st.write("**Rentang return harian** (kuantil):")
-                    st.table(pd.DataFrame(ret_rows))
-
-                # Prob > target/stop (default SR1/S1 jika kosong)
-                target_level = user_target if user_target > 0 else sr['Resistance'][0]
-                stop_level = user_stop if user_stop > 0 else sr['Support'][0]
-                probs = garch_prob_level(paths_p, {"target": target_level, "stop": stop_level})
-
-                colA, colB, colC = st.columns(3)
-                with colA:
-                    st.metric("Harga as-of", fmt_rp(summary["p0"]))
-                with colB:
-                    st.metric("Target (default: R1)", fmt_rp(target_level))
-                with colC:
-                    st.metric("Stop (default: S1)", fmt_rp(stop_level))
-
-                if "prob_up_by_day" in probs:
-                    st.write(f"Prob. **≥ Target** per-hari: " +
-                             ", ".join([f"D{d+1}: {p*100:.1f}%" for d, p in enumerate(probs['prob_up_by_day'])]) +
-                             f" • **5H**: {probs['prob_up_5d']*100:.1f}%")
-                if "prob_down_by_day" in probs:
-                    st.write(f"Prob. **≤ Stop** per-hari: " +
-                             ", ".join([f"D{d+1}: {p*100:.1f}%" for d, p in enumerate(probs['prob_down_by_day'])]) +
-                             f" • **5H**: {probs['prob_down_5d']*100:.1f}%")
-
-                st.caption(f"5H VaR95: {summary['VaR95_return']*100:.2f}%,  CVaR95: {summary['CVaR95_return']*100:.2f}%")
-
-                # ======== EVALUASI (jika ada data setelah as_of) ========
-                df_future = data_all[data_all.index > df_hist.index[-1]].head(horizon)
-                if not df_future.empty:
-                    st.subheader("🧪 Evaluasi Akurasi (as-of vs realisasi)")
-                    realized = df_future['Adj Close'] if 'Adj Close' in df_future.columns else df_future['Close']
-                    cover = []
-                    mae = []
-                    for d in range(len(realized)):
-                        r = float(realized.iloc[d])
-                        lo, md, hi = fan_prices[5][d], fan_prices[50][d], fan_prices[95][d]
-                        cover.append(1.0 if (lo <= r <= hi) else 0.0)
-                        mae.append(abs(r - md) / md)
-                    cov_rate = np.mean(cover) * 100 if cover else 0.0
-                    mae_pct = np.mean(mae) * 100 if mae else 0.0
-                    c1, c2 = st.columns(2)
-                    with c1: st.metric("Coverage band 90% (hari real tersedia)", f"{cov_rate:.1f}%")
-                    with c2: st.metric("MAE vs Median", f"{mae_pct:.2f}%")
-                    rows_eval = []
-                    idxs = realized.index
-                    for d in range(len(realized)):
-                        rows_eval.append({
-                            "Tanggal": str(idxs[d].date()),
-                            "Real": fmt_rp(realized.iloc[d]),
-                            "Band90%": f"{fmt_rp(fan_prices[5][d])} – {fmt_rp(fan_prices[95][d])}",
-                            "Dalam Band?": "✅" if cover[d] == 1.0 else "❌",
-                            "Abs Err vs P50": f"{mae[d]*100:.2f}%",
-                        })
-                    st.table(pd.DataFrame(rows_eval))
+            st.write("**Divergence**")
+            def _desc_div(div):
+                items = []
+                if div["bearish"]:
+                    a, b = div["bearish"]["price_points"]; items.append(f"Bearish (puncak {a.date()} → {b.date()})")
+                if div["bullish"]:
+                    a, b = div["bullish"]["price_points"]; items.append(f"Bullish (lembah {a.date()} → {b.date()})")
+                return " | ".join(items) if items else "Tidak terdeteksi"
+            st.write(f"RSI: {_desc_div(div_rsi)}")
+            st.write(f"MACD: {_desc_div(div_macd)}")
 
         # Disclaimer
-        st.info("**Disclaimer**: Edukasi, bukan rekomendasi. Trading mengandung risiko. Gunakan kebijaksanaan dan sesuaikan dengan profil risiko Anda.")
+        st.info("**Disclaimer**: Edukasi, bukan rekomendasi. Trading mengandung risiko. Sesuaikan dengan profil risiko Anda.")
 
 if __name__ == "__main__":
     app()
