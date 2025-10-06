@@ -1,5 +1,5 @@
 # =========================================================
-# === pisau_jatuh_app.py (Versi Bersih & Lengkap)        ===
+# === pisau_jatuh_app.py (Versi Terbaru, tanpa BSJP)     ===
 # =========================================================
 
 import streamlit as st
@@ -10,9 +10,10 @@ import numpy as np
 import io
 
 # =========================================================
-# === FORMAT ANGKA INDONESIA ===
+# === UTILITAS FORMAT ANGKA INDONESIA =====================
 # =========================================================
 def fmt(x):
+    """Ubah angka ke format Indonesia (1.234,56)"""
     try:
         if pd.isna(x): return "-"
         return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -20,7 +21,7 @@ def fmt(x):
         return x
 
 # =========================================================
-# === FUNGSI DETEKSI POLA (PISAU JATUH)                ===
+# === DETEKSI POLA PISAU JATUH ============================
 # =========================================================
 def detect_pattern(data):
     if len(data) < 4:
@@ -46,7 +47,7 @@ def detect_pattern(data):
     ])
 
 # =========================================================
-# === UTILITAS / I/O DATA ===
+# === UTILITAS / I/O DATA ================================
 # =========================================================
 def _normalize_tz(df):
     if df is None or df.empty:
@@ -91,7 +92,7 @@ def load_google_drive_excel(file_url):
         return None
 
 # =========================================================
-# === FUNGSI RSI ===
+# === FUNGSI RSI =========================================
 # =========================================================
 def calc_rsi(series, period=14):
     delta = series.diff()
@@ -101,7 +102,7 @@ def calc_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # =========================================================
-# === SWING SCREENER (versi baru)
+# === SWING SCREENER BARU ================================
 # =========================================================
 def swing_screener(df, analysis_date):
     results = []
@@ -131,21 +132,38 @@ def swing_screener(df, analysis_date):
             results.append({
                 "Ticker": ticker,
                 "Papan": papan,
-                "Harga Terakhir": fmt(price),
-                "Volume (Lot)": fmt(vol),
-                "Volume (Rp)": fmt(price * vol),
-                "MA10": fmt(ma10),
-                "MA20": fmt(ma20),
-                "Volume MA10 (Lot)": fmt(vol_ma10),
-                "Volume MA20 (Lot)": fmt(vol_ma20),
-                "Volume MA10 (Rp)": fmt(ma10 * vol_ma10),
-                "Volume MA20 (Rp)": fmt(ma20 * vol_ma20),
+                "Harga Terakhir (num)": price,
+                "Volume (Lot) (num)": vol,
+                "Volume (Rp) (num)": price * vol,
+                "MA10 (num)": ma10,
+                "MA20 (num)": ma20,
+                "Volume MA10 (Lot) (num)": vol_ma10,
+                "Volume MA20 (Lot) (num)": vol_ma20,
+                "Volume MA10 (Rp) (num)": ma10 * vol_ma10,
+                "Volume MA20 (Rp) (num)": ma20 * vol_ma20,
                 "RSI": round(data['RSI'].iloc[-1], 2)
             })
-    return pd.DataFrame(results)
+
+    df_result = pd.DataFrame(results)
+    if df_result.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    # Sort otomatis dari Volume Rp terbesar ke terkecil
+    df_result = df_result.sort_values("Volume (Rp) (num)", ascending=False)
+
+    # Format untuk tampilan
+    show_df = df_result.copy()
+    for col in df_result.columns:
+        if "(num)" in col:
+            show_df[col.replace(" (num)", "")] = df_result[col].apply(fmt)
+
+    # Hapus kolom numerik dari tampilan
+    show_df = show_df[[c for c in show_df.columns if "(num)" not in c]]
+
+    return show_df, df_result
 
 # =========================================================
-# === MODE 4: KONFIRMASI ===
+# === TANGGAL KONFIRMASI =================================
 # =========================================================
 def find_confirmation_dates_for_ticker(ticker, lookback_days=180, end_date=None):
     try:
@@ -181,7 +199,7 @@ def find_confirmation_dates_for_ticker(ticker, lookback_days=180, end_date=None)
         return pd.DataFrame()
 
 # =========================================================
-# === APLIKASI STREAMLIT ===
+# === APLIKASI STREAMLIT =================================
 # =========================================================
 def app():
     st.title("📊 Stock Screener Suite (Tanpa BSJP)")
@@ -210,14 +228,15 @@ def app():
     # ==========================
     if screener_choice.startswith("💹"):
         if st.button("📊 Jalankan Swing Screener"):
-            result_df = swing_screener(df, analysis_date)
-            if not result_df.empty:
-                st.subheader("✅ Hasil Swing Screener")
-                st.dataframe(result_df, use_container_width=True)
+            show_df, raw_df = swing_screener(df, analysis_date)
+            if not raw_df.empty:
+                st.subheader("✅ Hasil Swing Screener (otomatis urut Volume Rp terbesar)")
+                st.dataframe(show_df, use_container_width=True)
+
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine='openpyxl') as writer:
-                    result_df.to_excel(writer, index=False)
-                st.download_button("📥 Unduh Excel", out.getvalue(), file_name="swing_screener.xlsx")
+                    raw_df.to_excel(writer, index=False)
+                st.download_button("📥 Unduh Excel (angka mentah)", out.getvalue(), file_name="swing_screener_raw.xlsx")
             else:
                 st.warning("Tidak ada saham memenuhi kriteria Swing Screener.")
 
@@ -225,8 +244,7 @@ def app():
     # === MODE PISAU JATUH ====
     # ==========================
     elif screener_choice.startswith("🔪"):
-        st.info("Mode Pisau Jatuh tetap sama, hanya format angka diperbarui.")
-        st.stop()
+        st.info("Mode Pisau Jatuh tetap sama seperti sebelumnya (format angka Indonesia).")
 
     # ==========================
     # === MODE KONFIRMASI =====
@@ -249,7 +267,7 @@ def app():
                 st.download_button("📥 Unduh Excel", out.getvalue(), file_name=f"konfirmasi_{ticker}.xlsx")
 
 # =========================================================
-# === RUN APP
+# === RUN APP ============================================
 # =========================================================
 if __name__ == "__main__":
     app()
