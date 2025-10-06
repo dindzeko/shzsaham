@@ -1,5 +1,5 @@
 # =========================================================
-# === pisau_jatuh_app.py (Final, 4 Mode)                 ===
+# === pisau_jatuh_app.py (FINAL - Versi Sinkron Page Analisa)
 # =========================================================
 import streamlit as st
 import pandas as pd
@@ -132,7 +132,7 @@ def swing_screener(df, analysis_date):
     return show, dfres
 
 # =========================================================
-# === FIBO SUPPORT SCREENER (≤1 % di atas Fibo 1.0) ======
+# === FIBO SUPPORT SCREENER (≤1 % dari Fibo 1.0, 60 bar) ==
 # =========================================================
 def fibo_screener(df, analysis_date):
     results = []
@@ -141,14 +141,14 @@ def fibo_screener(df, analysis_date):
         if d is None or len(d) < 60:
             continue
 
-        # Gunakan HIGH dan LOW (bukan CLOSE) seperti page Analisa Saham
-        high = d["High"].max()
-        low = d["Low"].min()
+        # Gunakan 60 bar terakhir seperti page Analisa Saham
+        high = d["High"].tail(60).max()
+        low = d["Low"].tail(60).min()
         fibo_1_0 = low
         price = d["Close"].iloc[-1]
         rsi = calc_rsi(d["Close"]).iloc[-1]
 
-        # Kriteria: harga ≤ 1% di atas Fibo 1.0
+        # Masuk screener jika harga ≤ 1% di atas Fibo 1.0
         if price <= fibo_1_0 * 1.01:
             papan = df[df["Ticker"] == t]["Papan Pencatatan"].values[0]
             selisih = ((price - fibo_1_0) / fibo_1_0) * 100
@@ -210,7 +210,7 @@ def app():
             "🔪 Pisau Jatuh (Mode 1)",
             "🔎 Pisau Jatuh (Mode 2 - Konfirmasi)",
             "💹 Swing Screener",
-            "🧭 Fibo Support Screener (≤ 1 % Fib 1.0)"
+            "🧭 Fibo Support Screener (≤ 1 % dari Fibo 1.0)"
         ],
         index=2
     )
@@ -241,7 +241,7 @@ def app():
         if st.button("🧭 Jalankan Fibo Support Screener"):
             show, raw = fibo_screener(df, analysis_date)
             if not raw.empty:
-                st.subheader("✅ Saham mendekati support (≤ 1 % dari Fibo 1.0)")
+                st.subheader("✅ Saham mendekati support (≤ 1 % dari Fibo 1.0, 60 bar terakhir)")
                 st.dataframe(show, use_container_width=True)
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine="openpyxl") as w:
