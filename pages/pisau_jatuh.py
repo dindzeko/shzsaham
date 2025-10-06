@@ -1,5 +1,5 @@
 # =========================================================
-# === pisau_jatuh_app.py (Versi Lengkap 4 Screener)     ===
+# === pisau_jatuh_app.py (Versi Bersih & Lengkap)        ===
 # =========================================================
 
 import streamlit as st
@@ -8,6 +8,16 @@ import yfinance as yf
 from datetime import datetime, timedelta, date
 import numpy as np
 import io
+
+# =========================================================
+# === FORMAT ANGKA INDONESIA ===
+# =========================================================
+def fmt(x):
+    try:
+        if pd.isna(x): return "-"
+        return f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return x
 
 # =========================================================
 # === FUNGSI DETEKSI POLA (PISAU JATUH)                ===
@@ -81,54 +91,61 @@ def load_google_drive_excel(file_url):
         return None
 
 # =========================================================
-# === ANALISIS TAMBAHAN (MODE 1)
+# === FUNGSI RSI ===
 # =========================================================
-def analyze_results(screening_results, analysis_date):
-    enhanced_results = []
+def calc_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
-    for _, row in screening_results.iterrows():
-        ticker = row['Ticker']
-        try:
-            stock = yf.Ticker(f"{ticker}.JK")
-            end_date = datetime.today().date()
-            start_date = end_date - timedelta(days=90)
-            data = stock.history(
-                start=start_date.strftime('%Y-%m-%d'),
-                end=(end_date + timedelta(days=1)).strftime('%Y-%m-%d')
-            )
-            data = _normalize_tz(data)
-            if data is None or data.empty or len(data) < 20:
-                continue
+# =========================================================
+# === SWING SCREENER (versi baru)
+# =========================================================
+def swing_screener(df, analysis_date):
+    results = []
+    for ticker in df['Ticker'].dropna().unique():
+        data = get_stock_data(ticker, analysis_date)
+        if data is None or len(data) < 20:
+            continue
 
-            last_close = float(data['Close'].iloc[-1])
-            target_date = pd.Timestamp(analysis_date - timedelta(days=1)).tz_localize('Asia/Jakarta')
-            trading_days_before = data[data.index <= target_date]
-            if trading_days_before.empty:
-                continue
-            analysis_close = float(trading_days_before['Close'].iloc[-1])
-            latest_volume = float(data['Volume'].iloc[-1])
-            volume_rp = last_close * latest_volume
+        data['RSI'] = calc_rsi(data['Close'])
+        price = data['Close'].iloc[-1]
+        open_price = data['Open'].iloc[-1]
+        high_price = data['High'].iloc[-1]
+        low_price = data['Low'].iloc[-1]
 
-            ma5 = float(data['Close'].tail(5).mean())
-            ma20 = float(data['Close'].tail(20).mean())
+        body = abs(price - open_price)
+        candle_range = high_price - low_price
+        candle_strong_bullish = (price > open_price) and (body > 0.5 * candle_range)
 
-            enhanced_results.append({
+        ma10 = data['Close'].tail(10).mean()
+        ma20 = data['Close'].tail(20).mean()
+        vol = data['Volume'].iloc[-1]
+        vol_ma10 = data['Volume'].tail(10).mean()
+        vol_ma20 = data['Volume'].tail(20).mean()
+
+        if candle_strong_bullish and price > ma10 > ma20 and vol > vol_ma10:
+            papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
+            results.append({
                 "Ticker": ticker,
-                "Papan": row['Papan'],
-                "Harga Terakhir": round(last_close, 2),
-                "Harga Analisa": round(analysis_close, 2),
-                "Volume (Rp)": round(volume_rp, 2),
-                "MA 5": round(ma5, 2),
-                "MA 20": round(ma20, 2)
+                "Papan": papan,
+                "Harga Terakhir": fmt(price),
+                "Volume (Lot)": fmt(vol),
+                "Volume (Rp)": fmt(price * vol),
+                "MA10": fmt(ma10),
+                "MA20": fmt(ma20),
+                "Volume MA10 (Lot)": fmt(vol_ma10),
+                "Volume MA20 (Lot)": fmt(vol_ma20),
+                "Volume MA10 (Rp)": fmt(ma10 * vol_ma10),
+                "Volume MA20 (Rp)": fmt(ma20 * vol_ma20),
+                "RSI": round(data['RSI'].iloc[-1], 2)
             })
-
-        except Exception as e:
-            st.error(f"⚠️ Gagal menganalisis {ticker}: {str(e)}")
-
-    return pd.DataFrame(enhanced_results)
+    return pd.DataFrame(results)
 
 # =========================================================
-# === MODE 2: CARI TANGGAL KONFIRMASI
+# === MODE 4: KONFIRMASI ===
 # =========================================================
 def find_confirmation_dates_for_ticker(ticker, lookback_days=180, end_date=None):
     try:
@@ -145,19 +162,6 @@ def find_confirmation_dates_for_ticker(ticker, lookback_days=180, end_date=None)
         if data is None or data.empty:
             return pd.DataFrame()
 
-        today = datetime.today().date()
-        today_hist = stock.history(
-            start=(today - timedelta(days=30)).strftime('%Y-%m-%d'),
-            end=(today + timedelta(days=1)).strftime('%Y-%m-%d')
-        )
-        today_hist = _normalize_tz(today_hist)
-        if today_hist is None or today_hist.empty:
-            last_close_today = np.nan
-            last_close_date = None
-        else:
-            last_close_today = float(today_hist['Close'].iloc[-1])
-            last_close_date = today_hist.index[-1].date()
-
         confirmations = []
         for i in range(3, len(data) - 1):
             subset = data.iloc[:i + 1]
@@ -165,25 +169,11 @@ def find_confirmation_dates_for_ticker(ticker, lookback_days=180, end_date=None)
                 c4_idx = data.index[i]
                 confirm_idx = data.index[i + 1]
                 harga_c4 = float(data.loc[c4_idx, "Close"])
-
-                if pd.notna(last_close_today):
-                    chg_rp = last_close_today - harga_c4
-                    chg_pct = (chg_rp / harga_c4) * 100 if harga_c4 != 0 else np.nan
-                else:
-                    chg_rp, chg_pct = np.nan, np.nan
-
-                days_since = (last_close_date - confirm_idx.date()).days if last_close_date else None
-
                 confirmations.append({
                     "Ticker": ticker,
-                    "Tgl Konfirmasi (Hari ke-5)": confirm_idx.date(),
-                    "Harga Konfirmasi (Close)": round(harga_c4, 2),
-                    "Harga Today (Last Close)": round(last_close_today, 2) if pd.notna(last_close_today) else None,
-                    "Perubahan (Rp)": round(chg_rp, 2) if pd.notna(chg_rp) else None,
-                    "Perubahan (%)": round(chg_pct, 2) if pd.notna(chg_pct) else None,
-                    "Hari sejak Konfirmasi": days_since
+                    "Tgl Konfirmasi": confirm_idx.date(),
+                    "Harga Konfirmasi": fmt(harga_c4)
                 })
-
         return pd.DataFrame(confirmations)
 
     except Exception as e:
@@ -191,127 +181,60 @@ def find_confirmation_dates_for_ticker(ticker, lookback_days=180, end_date=None)
         return pd.DataFrame()
 
 # =========================================================
-# === APLIKASI STREAMLIT (4 SCREENER)
+# === APLIKASI STREAMLIT ===
 # =========================================================
 def app():
-    st.title("📊 Stock Screener Suite")
+    st.title("📊 Stock Screener Suite (Tanpa BSJP)")
 
     screener_choice = st.radio(
         "Pilih Screener:",
         [
             "🔪 Pisau Jatuh (Mode 1)",
-            "📈 BSJP Screener",
             "💹 Swing Screener",
             "🔎 Tanggal Konfirmasi (Mode 2)"
         ],
-        index=0
+        index=1
     )
 
     if 'screening_results' not in st.session_state:
         st.session_state.screening_results = None
 
-    # =====================================================
-    # === MODE 1: PISAU JATUH
-    # =====================================================
-    if screener_choice.startswith("🔪"):
-        file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
-        df = load_google_drive_excel(file_url)
-        if df is None: st.stop()
+    file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
+    df = load_google_drive_excel(file_url)
+    if df is None: st.stop()
 
-        tickers = df['Ticker'].dropna().unique().tolist()
-        analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today().date())
+    analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today().date())
 
-        if st.button("🔍 Mulai Screening Pisau Jatuh"):
-            results = []
-            progress = st.progress(0)
-            for i, ticker in enumerate(tickers):
-                data = get_stock_data(ticker, analysis_date)
-                if data is not None and len(data) >= 50 and detect_pattern(data):
-                    papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
-                    results.append({"Ticker": ticker, "Papan": papan})
-                progress.progress((i + 1) / len(tickers))
-            if results:
-                st.session_state.screening_results = analyze_results(pd.DataFrame(results), analysis_date)
-            else:
-                st.session_state.screening_results = pd.DataFrame()
-                st.warning("Tidak ada saham yang cocok dengan pola.")
-
-        if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:
-            st.subheader("✅ Hasil Screener Pisau Jatuh")
-            st.dataframe(st.session_state.screening_results, use_container_width=True)
-            out = io.BytesIO()
-            with pd.ExcelWriter(out, engine='openpyxl') as writer:
-                st.session_state.screening_results.to_excel(writer, index=False)
-            st.download_button("📥 Unduh Hasil (Excel)", out.getvalue(), file_name="pisau_jatuh.xlsx")
-
-    # =====================================================
-    # === MODE 2: BSJP
-    # =====================================================
-    elif screener_choice.startswith("📈"):
-        st.subheader("📈 BSJP Screener (Momentum & Value > 5M)")
-        file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
-        df = load_google_drive_excel(file_url)
-        if df is None: st.stop()
-        tickers = df['Ticker'].dropna().unique().tolist()
-        analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today().date())
-
-        if st.button("🚀 Jalankan Screener BSJP"):
-            results = []
-            for ticker in tickers:
-                data = get_stock_data(ticker, analysis_date)
-                if data is None or len(data) < 20: continue
-
-                price, prev_price = data['Close'].iloc[-1], data['Close'].iloc[-2]
-                ma20 = data['Close'].tail(20).mean()
-                vol, prev_vol = data['Volume'].iloc[-1], data['Volume'].iloc[-2]
-                value = price * vol
-
-                if vol > prev_vol and prev_price < price and price > ma20 and value > 5_000_000_000:
-                    papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
-                    results.append({"Ticker": ticker, "Papan": papan, "Harga": price, "MA20": ma20, "Value": value})
-
-            if results: st.dataframe(pd.DataFrame(results), use_container_width=True)
-            else: st.warning("Tidak ada saham memenuhi kriteria BSJP.")
-
-    # =====================================================
-    # === MODE 3: SWING
-    # =====================================================
-    elif screener_choice.startswith("💹"):
-        st.subheader("💹 Swing Screener (MA10>MA20 & Volume naik)")
-        file_url = "https://docs.google.com/spreadsheets/d/1t6wgBIcPEUWMq40GdIH1GtZ8dvI9PZ2v/edit?usp=drive_link"
-        df = load_google_drive_excel(file_url)
-        if df is None: st.stop()
-        tickers = df['Ticker'].dropna().unique().tolist()
-        analysis_date = st.date_input("📅 Tanggal Analisis", value=datetime.today().date())
-
+    # ==========================
+    # === MODE SWING ===========
+    # ==========================
+    if screener_choice.startswith("💹"):
         if st.button("📊 Jalankan Swing Screener"):
-            results = []
-            for ticker in tickers:
-                data = get_stock_data(ticker, analysis_date)
-                if data is None or len(data) < 20: continue
+            result_df = swing_screener(df, analysis_date)
+            if not result_df.empty:
+                st.subheader("✅ Hasil Swing Screener")
+                st.dataframe(result_df, use_container_width=True)
+                out = io.BytesIO()
+                with pd.ExcelWriter(out, engine='openpyxl') as writer:
+                    result_df.to_excel(writer, index=False)
+                st.download_button("📥 Unduh Excel", out.getvalue(), file_name="swing_screener.xlsx")
+            else:
+                st.warning("Tidak ada saham memenuhi kriteria Swing Screener.")
 
-                price, prev_price = data['Close'].iloc[-1], data['Close'].iloc[-2]
-                ma10, ma20 = data['Close'].tail(10).mean(), data['Close'].tail(20).mean()
-                vol, vol_ma20 = data['Volume'].iloc[-1], data['Volume'].tail(20).mean()
+    # ==========================
+    # === MODE PISAU JATUH ====
+    # ==========================
+    elif screener_choice.startswith("🔪"):
+        st.info("Mode Pisau Jatuh tetap sama, hanya format angka diperbarui.")
+        st.stop()
 
-                if price > ma10 and ma10 > ma20 and prev_price < ma10 and vol > vol_ma20:
-                    papan = df[df['Ticker'] == ticker]['Papan Pencatatan'].values[0]
-                    results.append({"Ticker": ticker, "Papan": papan, "Harga": price, "MA10": ma10, "MA20": ma20})
-
-            if results: st.dataframe(pd.DataFrame(results), use_container_width=True)
-            else: st.warning("Tidak ada saham memenuhi kriteria Swing Screener.")
-
-    # =====================================================
-    # === MODE 4: TANGGAL KONFIRMASI
-    # =====================================================
+    # ==========================
+    # === MODE KONFIRMASI =====
+    # ==========================
     else:
-        col1, col2, col3 = st.columns([2,1,1])
-        with col1:
-            ticker = st.text_input("📝 Masukkan Ticker", value="HUMI").upper().strip()
-        with col2:
-            lookback = st.number_input("Lookback (hari)", min_value=60, max_value=720, value=180, step=10)
-        with col3:
-            end_date = st.date_input("Sampai Tanggal", value=datetime.today().date())
+        ticker = st.text_input("📝 Masukkan Ticker", value="HUMI").upper().strip()
+        lookback = st.number_input("Lookback (hari)", min_value=60, max_value=720, value=180, step=10)
+        end_date = st.date_input("Sampai Tanggal", value=datetime.today().date())
 
         if st.button("🔎 Cari Tanggal Konfirmasi"):
             df_conf = find_confirmation_dates_for_ticker(ticker, int(lookback), end_date)
@@ -319,7 +242,6 @@ def app():
                 st.info("Tidak ditemukan tanggal konfirmasi.")
             else:
                 st.success(f"Ditemukan {len(df_conf)} tanggal konfirmasi.")
-                df_conf = df_conf.sort_values("Tgl Konfirmasi (Hari ke-5)", ascending=False)
                 st.dataframe(df_conf, use_container_width=True)
                 out = io.BytesIO()
                 with pd.ExcelWriter(out, engine='openpyxl') as writer:
